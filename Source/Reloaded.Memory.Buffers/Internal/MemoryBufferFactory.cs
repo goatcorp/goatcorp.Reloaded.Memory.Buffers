@@ -86,7 +86,8 @@ namespace Reloaded.Memory.Buffers.Internal
             if (result == (UIntPtr) 0)
                 throw new Exception("VirtualQuery failed. Result is 0.");
 
-            if (memoryInformation.State != (uint)Memory.Kernel32.Kernel32.MEM_ALLOCATION_TYPE.MEM_FREE)
+            if (memoryInformation.State != (uint)Memory.Kernel32.Kernel32.MEM_ALLOCATION_TYPE.MEM_FREE
+                && (memoryInformation.Protect & (uint)Memory.Kernel32.Kernel32.MEM_PROTECTION.PAGE_EXECUTE_READWRITE) != 0)
             {
                 if (IsBuffer(process, bufferMagicAddress))
                 {
@@ -128,11 +129,12 @@ namespace Reloaded.Memory.Buffers.Internal
         /// Checks if a <see cref="MemoryBuffer"/> exists at this location by comparing the bytes available here
         /// against the MemoryBuffer "Magic".
         /// </summary>
+        /// <remarks>Memory address must be readable.</remarks>
         internal static bool IsBuffer(Process process, nuint bufferMagicAddress)
         {
             try
             {
-                GetMemorySource(process).SafeRead(bufferMagicAddress, out MemoryBufferMagic bufferMagic);
+                GetMemorySource(process).Read(bufferMagicAddress, out MemoryBufferMagic bufferMagic);
 
                 if (_bufferMagic.MagicEquals(ref bufferMagic))
                     return true;

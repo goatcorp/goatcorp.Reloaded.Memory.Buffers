@@ -1,18 +1,19 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFrameworks>netstandard2.0;netstandard2.1;net5.0;net6.0</TargetFrameworks>
+    <TargetFrameworks>netstandard2.0;netstandard2.1;net6.0</TargetFrameworks>
     <RootNamespace>Reloaded.Memory.Buffers</RootNamespace>
+    <PackageId>goatcorp.Reloaded.Memory.Buffers</PackageId>
     <LangVersion>latest</LangVersion>
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
     <PackageLicenseUrl></PackageLicenseUrl>
-    <PackageProjectUrl>https://github.com/Reloaded-Project/Reloaded.Memory.Buffers</PackageProjectUrl>
+    <PackageProjectUrl>https://github.com/goatcorp/Reloaded.Memory.Buffers</PackageProjectUrl>
     <PackageIconUrl></PackageIconUrl>
-    <RepositoryUrl>https://github.com/Reloaded-Project/Reloaded.Memory.Buffers</RepositoryUrl>
+    <RepositoryUrl>https://github.com/goatcorp/Reloaded.Memory.Buffers</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <Description>An implementation of efficient, shared, concurrent and permanent storage of objects in unmanaged memory in static, non-changing locations that last the lifetime of a given process.</Description>
     <Version>2.0.0</Version>
-    <Authors>Sewer56</Authors>
+    <Authors>Sewer56, goatcorp contributors</Authors>
     <Company></Company>
     <Product>Project Reloaded</Product>
     <Copyright>LGPL V3</Copyright>

@@ -2,11 +2,11 @@ name: Build and Publish
 
 on:
   push:
-    branches: [ master ]
+    branches: [ master, modified ]
     tags:
       - '*'
   pull_request:
-    branches: [ master ]
+    branches: [ master, modified ]
   workflow_dispatch:
 
 env: 

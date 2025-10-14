@@ -1,10 +1,6 @@
 ﻿using System;
-using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
-using System.Threading;
-using Reloaded.Memory.Buffers.Internal;
 using Reloaded.Memory.Buffers.Internal.Structs;
-using Reloaded.Memory.Buffers.Internal.Utilities;
 using Reloaded.Memory.Sources;
 
 namespace Reloaded.Memory.Buffers
@@ -16,10 +12,9 @@ namespace Reloaded.Memory.Buffers
     public unsafe class MemoryBuffer : IDisposable
     {
         /// <summary>
-        /// Stores the reference to a system-wide mutex which prevents concurrent access
-        /// modifying/adding elements of the <see cref="MemoryBuffer"/>.
+        /// Userspace lock object for synchronizing access to the <see cref="MemoryBuffer"/>.
         /// </summary>
-        private Mutex _bufferAddMutex;
+        private readonly object _lock = new();
         
         /// <summary> Defines where Memory will be read in or written to. </summary>
         public IMemory MemorySource   { get; private set; }
@@ -70,35 +65,9 @@ namespace Reloaded.Memory.Buffers
         /// <inheritdoc/>
         public void Dispose()
         {
-            _bufferAddMutex?.Dispose();
+            // No resources to dispose for userspace lock.
             GC.SuppressFinalize(this);
         }
-
-        /// <summary>
-        /// Sets up the mutex to be used by this instance of the <see cref="MemoryBuffer"/>.
-        /// The factory methods in <see cref="MemoryBufferFactory"/> SHOULD call this method.
-        /// </summary>
-        internal void SetupMutex(Process process)
-        {
-            try
-            {
-                _bufferAddMutex = Mutex.OpenExisting(GetMutexName(process));
-            }
-            catch (WaitHandleCannotBeOpenedException)
-            {
-                // Mutex does not exist.
-                _bufferAddMutex = new Mutex(false, GetMutexName(process));
-            }
-        }
-
-        /// <summary>
-        /// Generates the name of the named system-wide mutex for this class.
-        /// </summary>
-        internal string GetMutexName(Process process)
-        {
-            return $"Reloaded.Memory.Buffers.MemoryBuffer | PID: {process.Id} | Memory Address: {_headerAddress.ToString()}";
-        }
-
 
         /*
             --------------
@@ -112,18 +81,9 @@ namespace Reloaded.Memory.Buffers
         /// <param name="func">The function to execute while preventing others' access to the buffer.</param>
         public T ExecuteWithLock<T>(Func<T> func)
         {
-            try
+            lock (_lock)
             {
-                _bufferAddMutex.WaitOne();
-                var result = func();
-                _bufferAddMutex.ReleaseMutex();
-
-                return result;
-            }
-            catch (Exception)
-            {
-                _bufferAddMutex.ReleaseMutex();
-                throw;
+                return func();
             }
         }
 

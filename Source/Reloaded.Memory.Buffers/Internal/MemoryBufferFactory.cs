@@ -49,7 +49,6 @@ namespace Reloaded.Memory.Buffers.Internal
             var memoryBufferProperties = new MemoryBufferProperties(dataPtr, realBufSize);
 
             var buffer = new MemoryBuffer(memorySource, headerAddress, memoryBufferProperties);
-            buffer.SetupMutex(process);
             return buffer;
         }
 
@@ -69,7 +68,6 @@ namespace Reloaded.Memory.Buffers.Internal
             var memoryBufferProperties = new MemoryBufferProperties(dataPtr, realBufSize);
 
             var buffer = new PrivateMemoryBuffer(memorySource, bufferAddress, memoryBufferProperties);
-            buffer.SetupMutex(process);
             return buffer;
         }
 
@@ -92,7 +90,6 @@ namespace Reloaded.Memory.Buffers.Internal
                 if (IsBuffer(process, bufferMagicAddress))
                 {
                     var buffer = new MemoryBuffer(GetMemorySource(process), (UIntPtr) bufferMagicAddress + sizeof(MemoryBufferMagic));
-                    buffer.SetupMutex(process);
                     return buffer;
                 }
             }

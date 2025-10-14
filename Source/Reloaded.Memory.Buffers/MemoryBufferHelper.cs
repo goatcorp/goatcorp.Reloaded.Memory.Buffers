@@ -20,11 +20,8 @@ namespace Reloaded.Memory.Buffers
         /// <summary> Contains the default size of memory pages to be allocated. </summary>
         internal const int DefaultPageSize = 0x1000;
 
-        /// <summary> Name of the systemwide mutex used for allocation synchronization. </summary>
-        internal string CreateBufferMutexName() => $"Reloaded.Memory.Buffers.MemoryBufferHelper | Allocate Memory | PID: {Process.Id}";
-
-        /// <summary> Mutex used to mutually exclude runs of all functions which internally allocate memory leading to a change of internal state. </summary>
-        private Mutex _allocateMemoryMutex;
+        /// <summary> Userspace lock object for allocation synchronization. </summary>
+        private readonly object _allocateMemoryLock = new object();
 
         /// <summary> Implementation of the Searcher that scans and finds existing <see cref="MemoryBuffer"/>s within the current process. </summary>
         private MemoryBufferSearcher _bufferSearcher;
@@ -43,7 +40,6 @@ namespace Reloaded.Memory.Buffers
             Process = process;
             _bufferSearcher = new MemoryBufferSearcher(process);
             _virtualQueryFunction = VirtualQueryUtility.GetVirtualQueryFunction(process);
-            _allocateMemoryMutex = MutexObtainer.MakeMutex(CreateBufferMutexName());
         }
 
         /*
@@ -103,29 +99,28 @@ namespace Reloaded.Memory.Buffers
                                             "where e.g. 0 is returned on failure but you can also allocate successfully on 0.");
             var exception = new Exception();
             // Keep retrying memory allocation.
-            _allocateMemoryMutex.WaitOne();
-
-            while (minimumAddress < maximumAddress)
+            lock (_allocateMemoryLock)
             {
-                try
+                while (minimumAddress < maximumAddress)
                 {
-                    return Run(retryCount, () =>
+                    try
                     {
-                        var memoryLocation = FindBufferLocation(size, minimumAddress, maximumAddress);
-                        var buffer = MemoryBufferFactory.CreateBuffer(Process, memoryLocation.MemoryAddress, memoryLocation.Size);
-                        _bufferSearcher.AddBuffer(buffer);
+                        return Run(retryCount, () =>
+                        {
+                            var memoryLocation = FindBufferLocation(size, minimumAddress, maximumAddress);
+                            var buffer = MemoryBufferFactory.CreateBuffer(Process, memoryLocation.MemoryAddress, memoryLocation.Size);
+                            _bufferSearcher.AddBuffer(buffer);
 
-                        _allocateMemoryMutex.ReleaseMutex();
-                        return buffer;
-                    });
-                }
-                catch (Exception e)
-                {
-                    exception = e;
-                    minimumAddress += 0x10000;
+                            return buffer;
+                        });
+                    }
+                    catch (Exception e)
+                    {
+                        exception = e;
+                        minimumAddress += 0x10000;
+                    }
                 }
             }
-            _allocateMemoryMutex.ReleaseMutex();
             throw exception;
         }
 
@@ -146,28 +141,27 @@ namespace Reloaded.Memory.Buffers
             var exception = new Exception();
 
             // Keep retrying memory allocation.
-            _allocateMemoryMutex.WaitOne();
-
-            while (minimumAddress < maximumAddress)
+            lock (_allocateMemoryLock)
             {
-                try
+                while (minimumAddress < maximumAddress)
                 {
-                    return Run(retryCount, () =>
+                    try
                     {
-                        var memoryLocation = FindBufferLocation(size, minimumAddress, maximumAddress, true);
-                        var buffer = MemoryBufferFactory.CreatePrivateBuffer(Process, memoryLocation.MemoryAddress, memoryLocation.Size);
+                        return Run(retryCount, () =>
+                        {
+                            var memoryLocation = FindBufferLocation(size, minimumAddress, maximumAddress, true);
+                            var buffer = MemoryBufferFactory.CreatePrivateBuffer(Process, memoryLocation.MemoryAddress, memoryLocation.Size);
 
-                        _allocateMemoryMutex.ReleaseMutex();
-                        return buffer;
-                    });
-                }
-                catch (Exception e)
-                {
-                    exception = e;
-                    minimumAddress += 0x10000;
+                            return buffer;
+                        });
+                    }
+                    catch (Exception e)
+                    {
+                        exception = e;
+                        minimumAddress += 0x10000;
+                    }
                 }
             }
-            _allocateMemoryMutex.ReleaseMutex();
             throw exception;
         }
 
@@ -237,33 +231,31 @@ namespace Reloaded.Memory.Buffers
                 throw new ArgumentException("Please do not set the minimum address to 0 or negative. It collides with the return values of Windows API functions" +
                                             "where e.g. 0 is returned on failure but you can also allocate successfully on 0.");
             var exception = new Exception();
-
             // Keep retrying memory allocation.
-            _allocateMemoryMutex.WaitOne();
-
-            while (minimumAddress < maximumAddress)
+            lock (_allocateMemoryLock)
             {
-                try
+                while (minimumAddress < maximumAddress)
                 {
-                    return Run(retryCount, () =>
+                    try
                     {
-                        var memoryLocation = FindBufferLocation(size, minimumAddress, maximumAddress, true);
-                        var virtualAllocFunction = VirtualAllocUtility.GetVirtualAllocFunction(Process);
-                        var result = virtualAllocFunction(Process.Handle, memoryLocation.MemoryAddress, (ulong)memoryLocation.Size);
+                        return Run(retryCount, () =>
+                        {
+                            var memoryLocation = FindBufferLocation(size, minimumAddress, maximumAddress, true);
+                            var virtualAllocFunction = VirtualAllocUtility.GetVirtualAllocFunction(Process);
+                            var result = virtualAllocFunction(Process.Handle, memoryLocation.MemoryAddress, (ulong)memoryLocation.Size);
 
-                        if (result == UIntPtr.Zero)
-                            throw new Exception("Failed to allocate memory using VirtualAlloc/VirtualAllocEx");
-                        _allocateMemoryMutex.ReleaseMutex();
-                        return memoryLocation;
-                    });
-                }
-                catch (Exception e)
-                {
-                    exception = e;
-                    minimumAddress += 0x10000;
+                            if (result == UIntPtr.Zero)
+                                throw new Exception("Failed to allocate memory using VirtualAlloc/VirtualAllocEx");
+                            return memoryLocation;
+                        });
+                    }
+                    catch (Exception e)
+                    {
+                        exception = e;
+                        minimumAddress += 0x10000;
+                    }
                 }
             }
-            _allocateMemoryMutex.ReleaseMutex();
             throw exception;
         }
 
@@ -273,17 +265,9 @@ namespace Reloaded.Memory.Buffers
         /// <param name="address">The address of the memory originally received from the call to <see cref="Allocate"/>.</param>
         public void Free(nuint address)
         {
-            _allocateMemoryMutex.WaitOne();
-
-            try
+            lock (_allocateMemoryLock)
             {
                 VirtualFreeUtility.GetVirtualFreeFunction(Process)(Process.Handle, address);
-                _allocateMemoryMutex.ReleaseMutex();
-            }
-            catch (Exception)
-            {
-                _allocateMemoryMutex.ReleaseMutex();
-                throw;
             }
         }
 

@@ -21,12 +21,10 @@ namespace Reloaded.Memory.Buffers
         internal const int DefaultPageSize = 0x1000;
 
         /// <summary> Userspace lock object for allocation synchronization. </summary>
-        private readonly object _allocateMemoryLock = new object();
-
-        /// <summary> Implementation of the Searcher that scans and finds existing <see cref="MemoryBuffer"/>s within the current process. </summary>
-        private MemoryBufferSearcher _bufferSearcher;
+        private readonly object _allocateMemoryLock = new();
         
-        private VirtualQueryUtility.VirtualQueryFunction _virtualQueryFunction;
+        /// <summary> Implementation of the Searcher that scans and finds existing <see cref="MemoryBuffer"/>s within the current process. </summary>
+        private readonly MemoryBufferSearcher _bufferSearcher = new();
 
         /// <summary> The process on which the MemoryBuffer acts upon. </summary>
         public Process Process { get; private set; }
@@ -38,8 +36,8 @@ namespace Reloaded.Memory.Buffers
         public MemoryBufferHelper(Process process)
         {
             Process = process;
-            _bufferSearcher = new MemoryBufferSearcher(process);
-            _virtualQueryFunction = VirtualQueryUtility.GetVirtualQueryFunction(process);
+            if (process.Id != Process.GetCurrentProcess().Id)
+                throw new ArgumentException("MemoryBufferHelper only supports the current process.");
         }
 
         /*
@@ -56,20 +54,19 @@ namespace Reloaded.Memory.Buffers
         /// <param name = "size" > The space in bytes that the specific <see cref="MemoryBuffer"/> would require to accomodate.</param>
         /// <param name="minimumAddress">The minimum absolute address to find a buffer in.</param>
         /// <param name="maximumAddress">The maximum absolute address to find a buffer in.</param>
-        /// <param name="isPrivateBuffer">Defines whether the buffer type created is a shared or private buffer.</param>
         /// <remarks>
         /// WARNING:
         ///     Using this in a multithreaded environment can be dangerous, be careful.
         ///     It is possible to have a race condition on memory allocation.
         ///     If you want to just allocate memory, please use the provided <see cref="Allocate"/> function instead.
         /// </remarks>
-        public BufferAllocationProperties FindBufferLocation(int size, nuint minimumAddress, nuint maximumAddress, bool isPrivateBuffer = false)
+        public BufferAllocationProperties FindBufferLocation(int size, nuint minimumAddress, nuint maximumAddress)
         {
             if (minimumAddress <= 0)
                 throw new ArgumentException("Please do not set the minimum address to 0 or negative. It collides with the return values of Windows API functions" +
                                             "where e.g. 0 is returned on failure but you can also allocate successfully on 0.");
 
-            int bufferSize = GetBufferSize(size, isPrivateBuffer);
+            int bufferSize = GetBufferSize(size);
             
             // Not found in cache, get all real pages and try find appropriate spot.
             var memoryPages = MemoryPages.GetPages(Process);
@@ -124,64 +121,11 @@ namespace Reloaded.Memory.Buffers
             throw exception;
         }
 
-
-        /// <summary>
-        /// Creates a <see cref="PrivateMemoryBuffer"/> that satisfies a set size constraint and proximity to a set address.
-        /// </summary>
-        /// <param name="size">The minimum size the <see cref="PrivateMemoryBuffer"/> will have to accomodate.</param>
-        /// <param name="minimumAddress">The minimum absolute address to create a buffer in.</param>
-        /// <param name="maximumAddress">The maximum absolute address to create a buffer in.</param>
-        /// <param name="retryCount">In the case the memory allocation fails; the amount of times memory allocation is to be retried.</param>
-        /// <exception cref="System.Exception">Memory allocation failure due to possible race condition with other process/process itself/Windows scheduling.</exception>
-        public PrivateMemoryBuffer CreatePrivateMemoryBuffer(int size, nuint minimumAddress = 0x10000, nuint maximumAddress = 0x7FFFFFFF, int retryCount = 3)
-        {
-            if (minimumAddress <= 0)
-                throw new ArgumentException("Please do not set the minimum address to 0 or negative. It collides with the return values of Windows API functions" +
-                                            "where e.g. 0 is returned on failure but you can also allocate successfully on 0.");
-            var exception = new Exception();
-
-            // Keep retrying memory allocation.
-            lock (_allocateMemoryLock)
-            {
-                while (minimumAddress < maximumAddress)
-                {
-                    try
-                    {
-                        return Run(retryCount, () =>
-                        {
-                            var memoryLocation = FindBufferLocation(size, minimumAddress, maximumAddress, true);
-                            var buffer = MemoryBufferFactory.CreatePrivateBuffer(Process, memoryLocation.MemoryAddress, memoryLocation.Size);
-
-                            return buffer;
-                        });
-                    }
-                    catch (Exception e)
-                    {
-                        exception = e;
-                        minimumAddress += 0x10000;
-                    }
-                }
-            }
-            throw exception;
-        }
-
         /*
             -------------------
             Core Helper Methods
             -------------------
         */
-
-        /// <summary>
-        /// Searches unmanaged memory for pre-existing <see cref="MemoryBuffer"/>s that satisfy
-        /// the given size requirements.
-        /// </summary>
-        /// <param name="size">The amount of bytes a buffer must have minimum.</param>
-        /// <param name="useCache">See <see cref="MemoryBufferSearcher.GetBuffers"/></param>
-        public MemoryBuffer[] FindBuffers(int size, bool useCache = true)
-        {
-            return _bufferSearcher.GetBuffers(size, useCache);
-        }
-
         /// <summary>
         /// Searches unmanaged memory for pre-existing <see cref="MemoryBuffer"/>s that satisfy
         /// the given size requirements and address range.
@@ -189,12 +133,11 @@ namespace Reloaded.Memory.Buffers
         /// <param name="size">The amount of bytes a buffer must have minimum.</param>
         /// <param name="minimumAddress">The maximum pointer a <see cref="MemoryBuffer"/> can occupy.</param>
         /// <param name="maximumAddress">The minimum pointer a <see cref="MemoryBuffer"/> can occupy.</param>
-        /// <param name="useCache">See <see cref="MemoryBufferSearcher.GetBuffers"/></param>
         /// <returns></returns>
-        public MemoryBuffer[] FindBuffers(int size, nuint minimumAddress, nuint maximumAddress, bool useCache = true)
+        public MemoryBuffer[] FindBuffers(int size, nuint minimumAddress, nuint maximumAddress)
         {
             // Get buffers already existing in process.
-            var buffers = _bufferSearcher.GetBuffers(size, useCache);
+            var buffers = _bufferSearcher.GetBuffers(size);
 
             // Get all MemoryBuffers where their raw data range fits into the given minimum and maximum address.
             AddressRange allowedRange = new AddressRange(minimumAddress, maximumAddress);
@@ -240,7 +183,7 @@ namespace Reloaded.Memory.Buffers
                     {
                         return Run(retryCount, () =>
                         {
-                            var memoryLocation = FindBufferLocation(size, minimumAddress, maximumAddress, true);
+                            var memoryLocation = FindBufferLocation(size, minimumAddress, maximumAddress);
                             var virtualAllocFunction = VirtualAllocUtility.GetVirtualAllocFunction(Process);
                             var result = virtualAllocFunction(Process.Handle, memoryLocation.MemoryAddress, (ulong)memoryLocation.Size);
 
@@ -283,9 +226,8 @@ namespace Reloaded.Memory.Buffers
         /// of raw data, taking into consideration buffer overhead.
         /// </summary>
         /// <param name="size">The size of the buffer to be allocated.</param>
-        /// <param name="isPrivateBuffer">Defines whether the buffer type created is a shared or private buffer.</param>
         /// <returns>A calculated buffer size based off of the requested capacity in bytes.</returns>
-        public int GetBufferSize(int size, bool isPrivateBuffer = false)
+        public int GetBufferSize(int size)
         {
             // Get size of buffer; allocation granularity or larger if greater than the granularity.
             GetSystemInfo(out var systemInfo);
@@ -297,10 +239,7 @@ namespace Reloaded.Memory.Buffers
             if (systemInfo.dwPageSize > pageSize || (pageSize % systemInfo.dwPageSize != 0))
                 pageSize = (int)systemInfo.dwPageSize;
 
-            if (isPrivateBuffer)
-                return Mathematics.RoundUp(size + MemoryBufferFactory.PrivateBufferOverhead, pageSize);
-
-            return Mathematics.RoundUp(size + MemoryBufferFactory.BufferOverhead, pageSize);
+            return Mathematics.RoundUp(size, pageSize);
         }
 
 

@@ -37,9 +37,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <None Update="HelloWorld.exe">
-      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
-    </None>
     <None Update="HelloWorldCore.dll">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </None>

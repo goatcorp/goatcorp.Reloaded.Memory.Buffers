@@ -1,8 +1,6 @@
 ﻿using System;
 using System.Diagnostics;
-using System.Linq;
 using System.Threading;
-using System.Threading.Tasks;
 using Reloaded.Memory.Buffers.Tests.Helpers;
 using Reloaded.Memory.Sources;
 using Xunit;
@@ -13,17 +11,13 @@ namespace Reloaded.Memory.Buffers.Tests
     public class MemoryBufferTests : IDisposable
     {
         private MemoryBufferHelper _bufferHelper;
-        private MemoryBufferHelper _externalBufferHelper;
         public MemoryBufferTests()
         {
             _bufferHelper = new MemoryBufferHelper(Process.GetCurrentProcess());
-            _externalBufferHelper = new MemoryBufferHelper(Process.Start("HelloWorld.exe"));
         }
 
         public void Dispose()
         {
-            _externalBufferHelper.Process.Kill();
-            _externalBufferHelper.Process.Dispose();
         }
 
         /// <summary>
@@ -32,88 +26,7 @@ namespace Reloaded.Memory.Buffers.Tests
         [Fact]
         public void CreateBufferInternal() => CreateBufferBase(_bufferHelper);
 
-        /// <summary>
-        /// Tests if a <see cref="MemoryBuffer"/> can be successfully created.
-        /// </summary>
-        [Fact]
-        public void CreateBufferExternal() => CreateBufferBase(_externalBufferHelper);
-
-        /// <summary>
-        /// Tests if a <see cref="PrivateMemoryBuffer"/> can be successfully created.
-        /// </summary>
-        [Fact]
-        public void CreatePrivateBufferInternal() => CreatePrivateBufferBase(_bufferHelper);
-
-        /// <summary>
-        /// Tests if a <see cref="PrivateMemoryBuffer"/> can be successfully created.
-        /// </summary>
-        [Fact]
-        public void CreaterivateBufferExternal() => CreatePrivateBufferBase(_externalBufferHelper);
-
-        /// <summary>
-        /// Creates a <see cref="MemoryBuffer"/> and attempts to retrieve it by searching for it in memory.
-        /// </summary>
-        [Fact]
-        private void GetBuffersInternal() => GetBuffers(_bufferHelper);
-
-        /// <summary>
-        /// Creates a <see cref="MemoryBuffer"/> and attempts to retrieve it by searching for it in memory.
-        /// </summary>
-        [Fact]
-        private void GetBuffersExternal() => GetBuffers(_externalBufferHelper);
-
-        /// <summary>
-        /// Attempts to create a set of <see cref="MemoryBuffer"/>s at the beginning and end of the
-        /// address space, and then find the given buffers.
-        /// </summary>
-        [Fact]
-        public unsafe void GetBuffersInRangeInternal() => GetBuffersInRange(_bufferHelper, GetMaxAddress(_bufferHelper));
-
-        /// <summary>
-        /// Attempts to create a set of <see cref="MemoryBuffer"/>s at the beginning and end of the
-        /// address space, and then find the given buffers.
-        /// </summary>
-        [Fact]
-        public unsafe void GetBuffersInRangeExternal() => GetBuffersInRange(_externalBufferHelper, GetMaxAddress(_externalBufferHelper));
-
-#if X86
-        /// <summary>
-        /// Attempts to create a set of <see cref="MemoryBuffer"/>s at the beginning and end of the
-        /// address space, and then find the given buffers.
-        /// </summary>
-        [Fact(Skip = "This test needs to be ran manually with a patched test runner.")]
-        public unsafe void GetBuffersInRangeInternal_LargeAddressAware()
-        {
-            AssertLargeAddressAware();
-            GetBuffersInRange(_bufferHelper, int.MaxValue, uint.MaxValue);
-        }
-
-        /// <summary>
-        /// Attempts to create a set of <see cref="MemoryBuffer"/>s at the beginning and end of the
-        /// address space, and then find the given buffers.
-        /// </summary>
-        [Fact(Skip = "This test needs to be ran manually with a patched test runner.")]
-        public unsafe void GetBuffersInRangeExternal_LargeAddressAware()
-        {
-            AssertLargeAddressAware();
-            GetBuffersInRange(_externalBufferHelper, int.MaxValue, uint.MaxValue);
-        }
-
-        void AssertLargeAddressAware()
-        {
-            var maxAddress = GetMaxAddress(_externalBufferHelper, true);
-            if ((long)maxAddress <= int.MaxValue)
-                Assert.False(true, "Test host is not large address aware!!");
-        }
-#endif
-
         /* Same as above, except without cache. */
-
-        [Fact]
-        public unsafe void GetBuffersInRangeInternalNoCache() => GetBuffersInRangeNoCache(_bufferHelper, GetMaxAddress(_bufferHelper));
-        
-        [Fact]
-        public unsafe void GetBuffersInRangeExternalNoCache() => GetBuffersInRangeNoCache(_externalBufferHelper, GetMaxAddress(_externalBufferHelper));
 
         /// <summary>
         /// Tests the "Add" functionality of the <see cref="MemoryBuffer"/>; including
@@ -123,53 +36,11 @@ namespace Reloaded.Memory.Buffers.Tests
         private void MemoryBufferAddGenericInternal() => MemoryBufferAddGeneric(CreateMemoryBuffer(_bufferHelper), _bufferHelper.Process);
 
         /// <summary>
-        /// Tests the "Add" functionality of the <see cref="MemoryBuffer"/>; including
-        /// the return of the correct pointer and CanItemFit.
-        /// </summary>
-        [Fact]
-        private void MemoryBufferAddGenericExternal() => MemoryBufferAddGeneric(CreateMemoryBuffer(_externalBufferHelper), _externalBufferHelper.Process);
-
-        /// <summary>
-        /// Tests the "Add" functionality of the <see cref="PrivateMemoryBuffer"/>; including
-        /// the return of the correct pointer and CanItemFit.
-        /// </summary>
-        [Fact]
-        private void PrivateMemoryBufferAddGenericInternal() => MemoryBufferAddGeneric(CreatePrivateMemoryBuffer(_bufferHelper), _bufferHelper.Process);
-
-        /// <summary>
-        /// Tests the "Add" functionality of the <see cref="PrivateMemoryBuffer"/>; including
-        /// the return of the correct pointer and CanItemFit.
-        /// </summary>
-        [Fact]
-        private void PrivateMemoryBufferAddGenericExternal() => MemoryBufferAddGeneric(CreatePrivateMemoryBuffer(_externalBufferHelper), _externalBufferHelper.Process);
-
-        /// <summary>
         /// Tests the "Add" functionality of the <see cref="MemoryBuffer"/>, with raw data;
         /// including the return of the correct pointer and CanItemFit.
         /// </summary>
         [Fact]
         private unsafe void MemoryBufferAddByteArrayInternal() => MemoryBufferAddByteArray(CreateMemoryBuffer(_bufferHelper), _bufferHelper.Process);
-
-        /// <summary>
-        /// Tests the "Add" functionality of the <see cref="MemoryBuffer"/>, with raw data;
-        /// including the return of the correct pointer and CanItemFit.
-        /// </summary>
-        [Fact]
-        private unsafe void MemoryBufferAddByteArrayExternal() => MemoryBufferAddByteArray(CreateMemoryBuffer(_externalBufferHelper), _externalBufferHelper.Process);
-
-        /// <summary>
-        /// Tests the "Add" functionality of the <see cref="PrivateMemoryBuffer"/>, with raw data;
-        /// including the return of the correct pointer and CanItemFit.
-        /// </summary>
-        [Fact]
-        private unsafe void PrivateMemoryBufferAddByteArrayInternal() => MemoryBufferAddByteArray(CreatePrivateMemoryBuffer(_bufferHelper), _bufferHelper.Process);
-
-        /// <summary>
-        /// Tests the "Add" functionality of the <see cref="PrivateMemoryBuffer"/>, with raw data;
-        /// including the return of the correct pointer and CanItemFit.
-        /// </summary>
-        [Fact]
-        private unsafe void PrivateMemoryBufferAddByteArrayExternal() => MemoryBufferAddByteArray(CreatePrivateMemoryBuffer(_externalBufferHelper), _externalBufferHelper.Process);
 
 
         /*
@@ -185,18 +56,14 @@ namespace Reloaded.Memory.Buffers.Tests
             {
                 // Commit
                 var buf = _bufferHelper.Allocate(4096);
-                var extBuf = _externalBufferHelper.Allocate(4096);
 
                 // Write something to start of buffers to test allocation.
                 var bufMem = new Sources.Memory();
-                var extBufMem = new ExternalMemory(_externalBufferHelper.Process);
 
                 bufMem.Write(buf.MemoryAddress, 5);
-                extBufMem.Write(extBuf.MemoryAddress, 5);
 
                 // Release
                 _bufferHelper.Free(buf.MemoryAddress);
-                _externalBufferHelper.Free(extBuf.MemoryAddress);
             }
         }
 
@@ -226,160 +93,6 @@ namespace Reloaded.Memory.Buffers.Tests
 
             // Cleanup
             Internal.Testing.Buffers.FreeBuffer(buffer);
-        }
-
-        /// <summary>
-        /// [Testing Purposes]
-        /// Creates a buffer, then frees the memory belonging to the buffer.
-        /// </summary>
-        private void CreatePrivateBufferBase(MemoryBufferHelper bufferHelper)
-        {
-            var buffer = bufferHelper.CreatePrivateMemoryBuffer(4096);
-
-            // Cleanup
-            buffer.Dispose();
-        }
-
-        /// <summary>
-        /// Creates a <see cref="MemoryBuffer"/> and attempts to retrieve it by searching for it in memory.
-        /// </summary>
-        private void GetBuffers(MemoryBufferHelper bufferHelper)
-        {
-            // Options
-            int size        = 4096;
-            int repetitions = 128;
-            int increment   = 2048;
-
-            // Setup
-            MemoryBuffer[] memoryBuffers = new MemoryBuffer[repetitions];
-
-            for (int x = 0; x < repetitions; x++)
-            {
-                int newSize = size + (x * increment);
-                memoryBuffers[x] = bufferHelper.CreateMemoryBuffer(newSize);
-            }
-
-            // Search for our buffers with exact originally given buffer sizes and try find the exact buffer.
-            for (int x = 0; x < repetitions; x++)
-            {
-                int newSize = size + (x * increment);
-                var buffers = bufferHelper.FindBuffers(newSize);
-
-                if (!buffers.Contains(memoryBuffers[x]))
-                    Assert.True(false, $"Failed to find existing buffer in memory of minimum size {newSize} bytes.");
-            }
-
-            // Cleanup.
-            for (int x = 0; x < repetitions; x++)
-                Internal.Testing.Buffers.FreeBuffer(memoryBuffers[x]);
-        }
-
-        /// <summary>
-        /// Attempts to create a set of <see cref="MemoryBuffer"/>s at the beginning and end of the
-        /// address space, and then find the given buffers.
-        /// </summary>
-        private unsafe void GetBuffersInRange(MemoryBufferHelper bufferHelper, nuint minAddress, nuint maxAddress)
-        {
-            /* The reason that testing the upper half is sufficient is because the buffer allocation
-               functions work in such a manner that they allocate from the lowest address.
-               As such, normally the only allocated addresses would be in the lower half... until enough memory is allocated to cross the upper half.
-            */
-
-            // Options
-            int sizeStart = 0;    // Default page size for x86 and x64.
-            int repetitions = 128;
-            int increment = 4096; // Equal to allocation granularity.
-
-            MemoryBuffer[] buffers = new MemoryBuffer[repetitions];
-
-            // Allocate <repetitions> buffers, and try to find them all.
-            for (int x = 0; x < repetitions; x++)
-            {
-                int newSize = sizeStart + (x * increment);
-                buffers[x] = bufferHelper.CreateMemoryBuffer(newSize, minAddress, maxAddress);
-            }
-
-            // Validate whether each buffer is present and in range.
-            for (int x = 0; x < repetitions; x++)
-            {
-                int newSize = sizeStart + (x * increment);
-                var foundBuffers = bufferHelper.FindBuffers(newSize, minAddress, maxAddress);
-
-                if (!foundBuffers.Contains(buffers[x]))
-                    Assert.True(false, $"Failed to find existing buffer in memory of minimum size {newSize} bytes.");
-
-                foreach (var buffer in foundBuffers)
-                    AssertBufferInRange(buffer, minAddress, maxAddress);
-            }
-
-            // Cleanup
-            for (int x = 0; x < buffers.Length; x++)
-                Internal.Testing.Buffers.FreeBuffer(buffers[x]);
-        }
-
-        /// <summary>
-        /// Attempts to create a set of <see cref="MemoryBuffer"/>s at the beginning and end of the
-        /// address space, and then find the given buffers.
-        /// </summary>
-        private unsafe void GetBuffersInRange(MemoryBufferHelper bufferHelper, UIntPtr maxApplicationAddress)
-        {
-            /* The reason that testing the upper half is sufficient is because the buffer allocation
-               functions work in such a manner that they allocate from the lowest address.
-               As such, normally the only allocated addresses would be in the lower half... until enough memory is allocated to cross the upper half.
-            */
-
-            // Minimum address is start of upper half of 32/64 bit address range.
-            // Maximum is the maximum address in 32/64 bit address range.
-            long minAddress = (long)maxApplicationAddress - ((long)maxApplicationAddress / 2);
-            long maxAddress = (long)maxApplicationAddress;
-            GetBuffersInRange(bufferHelper, (nuint)minAddress, (nuint)maxAddress);
-        }
-
-        /// <summary>
-        /// Same as <see cref="GetBuffersInRange"/>, except disables the caching when acquiring <see cref="MemoryBuffer"/>s.
-        /// </summary>
-        private unsafe void GetBuffersInRangeNoCache(MemoryBufferHelper bufferHelper, UIntPtr maxApplicationAddress)
-        {
-            /* The reason that testing the upper half is sufficient is because the buffer allocation
-               functions work in such a manner that they allocate from the lowest address.
-               As such, normally the only allocated addresses would be in the lower half... until enough memory is allocated to cross the upper half.
-            */
-
-            // Options
-            int sizeStart = 0;    // Default page size for x86 and x64.
-            int repetitions = 128;
-            int increment = 4096; // Equal to allocation granularity.
-
-            // Minimum address is start of upper half of 32/64 bit address range.
-            // Maximum is the maximum address in 32/64 bit address range.
-            nuint minAddress = (nuint)maxApplicationAddress - ((nuint)maxApplicationAddress / 2);
-            nuint maxAddress = (nuint)maxApplicationAddress;
-
-            MemoryBuffer[] buffers = new MemoryBuffer[repetitions];
-
-            // Allocate <repetitions> buffers, and try to find them all.
-            for (int x = 0; x < repetitions; x++)
-            {
-                int newSize = sizeStart + (x * increment);
-                buffers[x] = bufferHelper.CreateMemoryBuffer(newSize, minAddress, maxAddress);
-            }
-
-            // Validate whether each buffer is present and in range.
-            for (int x = 0; x < repetitions; x++)
-            {
-                int newSize = sizeStart + (x * increment);
-                var foundBuffers = bufferHelper.FindBuffers(newSize, minAddress, maxAddress, false);
-
-                if (!foundBuffers.Contains(buffers[x]))
-                    Assert.True(false, $"Failed to find existing buffer in memory of minimum size {newSize} bytes.");
-
-                foreach (var buffer in foundBuffers)
-                    AssertBufferInRange(buffer, minAddress, maxAddress);
-            }
-
-            // Cleanup
-            for (int x = 0; x < buffers.Length; x++)
-                Internal.Testing.Buffers.FreeBuffer(buffers[x]);
         }
 
         /// <summary>
@@ -484,11 +197,6 @@ namespace Reloaded.Memory.Buffers.Tests
         private MemoryBuffer CreateMemoryBuffer(MemoryBufferHelper helper)
         {
             return helper.CreateMemoryBuffer(4096);
-        }
-
-        private MemoryBuffer CreatePrivateMemoryBuffer(MemoryBufferHelper helper)
-        {
-            return helper.CreatePrivateMemoryBuffer(4096);
         }
 
         /// <summary>

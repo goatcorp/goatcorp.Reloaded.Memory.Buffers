@@ -6,8 +6,7 @@ using Reloaded.Memory.Sources;
 namespace Reloaded.Memory.Buffers
 {
     /// <summary>
-    /// Provides a buffer for permanent (until the process dies) general small size memory storage, reusable 
-    /// concurrently between different DLLs within the same process.
+    /// Provides a buffer for permanent (until the process dies) general small size memory storage.
     /// </summary>
     public unsafe class MemoryBuffer : IDisposable
     {
@@ -20,18 +19,10 @@ namespace Reloaded.Memory.Buffers
         public IMemory MemorySource   { get; private set; }
 
         /// <summary> Gets/Sets the header/properties of the buffer stored in unmanaged memory. </summary>
-        public MemoryBufferProperties Properties
-        {
-            get
-            {
-                MemorySource.Read(_headerAddress, out MemoryBufferProperties bufferHeader);
-                return bufferHeader;
-            }
-            set => MemorySource.Write(_headerAddress, ref value);
-        }
+        public MemoryBufferProperties Properties { get; set; }
 
         /// <summary> Stores the location of the <see cref="MemoryBufferProperties"/> structure. </summary>
-        private readonly nuint _headerAddress;
+        private readonly nuint _address;
 
         /*
             --------------
@@ -39,13 +30,13 @@ namespace Reloaded.Memory.Buffers
             --------------
         */
 
-        internal MemoryBuffer(IMemory memorySource, nuint headerAddress)
+        internal MemoryBuffer(IMemory memorySource, nuint address)
         {
-            _headerAddress = headerAddress;
+            _address = address;
             MemorySource   = memorySource;
         }
 
-        internal MemoryBuffer(IMemory memorySource, nuint headerAddress, MemoryBufferProperties memoryBufferProperties) : this(memorySource, headerAddress)
+        internal MemoryBuffer(IMemory memorySource, nuint address, MemoryBufferProperties memoryBufferProperties) : this(memorySource, address)
         {
             Properties = memoryBufferProperties;
         }
@@ -65,7 +56,8 @@ namespace Reloaded.Memory.Buffers
         /// <inheritdoc/>
         public void Dispose()
         {
-            // No resources to dispose for userspace lock.
+            // TODO: This probably doesn't work as intended since MemoryBufferSearcher caches buffers?
+            //MemorySource.Free(AllocationAddress);
             GC.SuppressFinalize(this);
         }
 
@@ -107,7 +99,7 @@ namespace Reloaded.Memory.Buffers
         /// <summary>
         /// Allocates a fixed amount of memory on the buffer for your own data to be stored.
         /// </summary>
-        /// <param name="numBytes">Number of bytes to write..</param>
+        /// <param name="numBytes">Number of bytes to write.</param>
         /// <param name="alignment">The memory alignment of the item to be added to the buffer.</param>
         /// <returns>Pointer to the passed in bytes written to memory. Null pointer, if it cannot fit into the buffer.</returns>
         public nuint Add(int numBytes, int alignment = 4)
@@ -227,21 +219,21 @@ namespace Reloaded.Memory.Buffers
         /// [Testing use only]
         /// The address where the individual buffer has been allocated.
         /// </summary>
-        internal nuint AllocationAddress => (UIntPtr)_headerAddress - sizeof(MemoryBufferMagic);
+        internal nuint AllocationAddress => _address;
 
         /// <summary/>
         public override bool Equals(object obj)
         {
             // The two <see cref="MemoryBuffer"/>s are equal if their base address is the same.
             var buffer = obj as MemoryBuffer;
-            return buffer != null && _headerAddress == buffer._headerAddress;
+            return buffer != null && _address == buffer._address;
         }
 
         /// <summary/>
         [ExcludeFromCodeCoverage]
         public override int GetHashCode()
         {
-            return (int)_headerAddress;
+            return (int)_address;
         }
     }
 }

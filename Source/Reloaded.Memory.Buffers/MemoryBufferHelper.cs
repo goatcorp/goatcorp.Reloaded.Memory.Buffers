@@ -1,7 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.Threading;
 using Reloaded.Memory.Buffers.Internal;
 using Reloaded.Memory.Buffers.Internal.Structs;
 using Reloaded.Memory.Buffers.Internal.Utilities;
@@ -19,9 +18,6 @@ namespace Reloaded.Memory.Buffers
     {
         /// <summary> Contains the default size of memory pages to be allocated. </summary>
         internal const int DefaultPageSize = 0x1000;
-
-        /// <summary> Userspace lock object for allocation synchronization. </summary>
-        private readonly object _allocateMemoryLock = new();
         
         /// <summary> Implementation of the Searcher that scans and finds existing <see cref="MemoryBuffer"/>s within the current process. </summary>
         private readonly MemoryBufferSearcher _bufferSearcher = new();
@@ -95,27 +91,23 @@ namespace Reloaded.Memory.Buffers
                 throw new ArgumentException("Please do not set the minimum address to 0 or negative. It collides with the return values of Windows API functions" +
                                             "where e.g. 0 is returned on failure but you can also allocate successfully on 0.");
             var exception = new Exception();
-            // Keep retrying memory allocation.
-            lock (_allocateMemoryLock)
+            while (minimumAddress < maximumAddress)
             {
-                while (minimumAddress < maximumAddress)
+                try
                 {
-                    try
+                    return Run(retryCount, () =>
                     {
-                        return Run(retryCount, () =>
-                        {
-                            var memoryLocation = FindBufferLocation(size, minimumAddress, maximumAddress);
-                            var buffer = MemoryBufferFactory.CreateBuffer(Process, memoryLocation.MemoryAddress, memoryLocation.Size);
-                            _bufferSearcher.AddBuffer(buffer);
+                        var memoryLocation = FindBufferLocation(size, minimumAddress, maximumAddress);
+                        var buffer = MemoryBufferFactory.CreateBuffer(memoryLocation.MemoryAddress, memoryLocation.Size);
+                        _bufferSearcher.AddBuffer(buffer);
 
-                            return buffer;
-                        });
-                    }
-                    catch (Exception e)
-                    {
-                        exception = e;
-                        minimumAddress += 0x10000;
-                    }
+                        return buffer;
+                    });
+                }
+                catch (Exception e)
+                {
+                    exception = e;
+                    minimumAddress += 0x10000;
                 }
             }
             throw exception;
@@ -174,29 +166,24 @@ namespace Reloaded.Memory.Buffers
                 throw new ArgumentException("Please do not set the minimum address to 0 or negative. It collides with the return values of Windows API functions" +
                                             "where e.g. 0 is returned on failure but you can also allocate successfully on 0.");
             var exception = new Exception();
-            // Keep retrying memory allocation.
-            lock (_allocateMemoryLock)
+            while (minimumAddress < maximumAddress)
             {
-                while (minimumAddress < maximumAddress)
+                try
                 {
-                    try
+                    return Run(retryCount, () =>
                     {
-                        return Run(retryCount, () =>
-                        {
-                            var memoryLocation = FindBufferLocation(size, minimumAddress, maximumAddress);
-                            var virtualAllocFunction = VirtualAllocUtility.GetVirtualAllocFunction(Process);
-                            var result = virtualAllocFunction(Process.Handle, memoryLocation.MemoryAddress, (ulong)memoryLocation.Size);
+                        var memoryLocation = FindBufferLocation(size, minimumAddress, maximumAddress);
+                        var result = VirtualAllocUtility.VirtualAllocLocal(memoryLocation.MemoryAddress, (ulong)memoryLocation.Size);
 
-                            if (result == UIntPtr.Zero)
-                                throw new Exception("Failed to allocate memory using VirtualAlloc/VirtualAllocEx");
-                            return memoryLocation;
-                        });
-                    }
-                    catch (Exception e)
-                    {
-                        exception = e;
-                        minimumAddress += 0x10000;
-                    }
+                        if (result == UIntPtr.Zero)
+                            throw new Exception("Failed to allocate memory using VirtualAlloc/VirtualAllocEx");
+                        return memoryLocation;
+                    });
+                }
+                catch (Exception e)
+                {
+                    exception = e;
+                    minimumAddress += 0x10000;
                 }
             }
             throw exception;
@@ -208,10 +195,7 @@ namespace Reloaded.Memory.Buffers
         /// <param name="address">The address of the memory originally received from the call to <see cref="Allocate"/>.</param>
         public void Free(nuint address)
         {
-            lock (_allocateMemoryLock)
-            {
-                VirtualFreeUtility.GetVirtualFreeFunction(Process)(Process.Handle, address);
-            }
+            VirtualFreeUtility.VirtualFreeLocal(address);
         }
 
 

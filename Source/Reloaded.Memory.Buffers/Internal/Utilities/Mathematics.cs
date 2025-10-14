@@ -1,6 +1,4 @@
-﻿using System;
-
-namespace Reloaded.Memory.Buffers.Internal.Utilities
+﻿namespace Reloaded.Memory.Buffers.Internal.Utilities
 {
     internal static class Mathematics
     {

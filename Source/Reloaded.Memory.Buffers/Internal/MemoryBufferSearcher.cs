@@ -1,10 +1,5 @@
-﻿using System;
-using System.Collections.Concurrent;
-using System.Collections.Generic;
-using System.Diagnostics;
+﻿using System.Collections.Concurrent;
 using System.Linq;
-using System.Threading;
-using static Reloaded.Memory.Kernel32.Kernel32;
 
 namespace Reloaded.Memory.Buffers.Internal
 {
@@ -15,7 +10,7 @@ namespace Reloaded.Memory.Buffers.Internal
     internal class MemoryBufferSearcher
     {
         /// <summary> Maintains address to buffer mappings. </summary>
-        private ConcurrentDictionary<nuint, MemoryBuffer> _bufferCache = new();
+        private readonly ConcurrentDictionary<nuint, MemoryBuffer> _bufferCache = new();
         
         /// <summary>
         /// Adds a new <see cref="MemoryBuffer"/> to the internal buffer cache.

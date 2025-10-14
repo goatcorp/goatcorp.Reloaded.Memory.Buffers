@@ -1,6 +1,4 @@
-﻿using System;
-
-namespace Reloaded.Memory.Buffers.Internal.Structs
+﻿namespace Reloaded.Memory.Buffers.Internal.Structs
 {
     /// <summary>
     /// Stores the properties which define a buffer allocation; i.e. where memory can be allocated.

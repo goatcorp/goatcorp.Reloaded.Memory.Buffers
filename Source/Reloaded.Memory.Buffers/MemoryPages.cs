@@ -33,11 +33,7 @@ namespace Reloaded.Memory.Buffers
             // Support Large Address Aware
             if (IntPtr.Size == 4 && (nuint)systemInfo.lpMaximumApplicationAddress > maxAddress)
                 maxAddress = (nuint)systemInfo.lpMaximumApplicationAddress;
-
-            // Get the VirtualQuery function implementation to use.
-            // Local is faster and works for current process; Remote is for another process.
-            VirtualQueryUtility.VirtualQueryFunction virtualQueryFunction = VirtualQueryUtility.GetVirtualQueryFunction(process);
-
+            
             // Shorthand for convenience.
             List<MEMORY_BASIC_INFORMATION> memoryPages = new List<MEMORY_BASIC_INFORMATION>(8192);
 
@@ -46,7 +42,7 @@ namespace Reloaded.Memory.Buffers
             {
                 // Get our info from VirtualQueryEx.
                 var memoryInformation = new MEMORY_BASIC_INFORMATION();
-                var result = virtualQueryFunction(process.Handle, (nuint)currentAddress, ref memoryInformation);
+                var result = VirtualQueryUtility.VirtualQueryLocal((nuint)currentAddress, ref memoryInformation);
                 if (result == (UIntPtr) 0)
                     break;
 

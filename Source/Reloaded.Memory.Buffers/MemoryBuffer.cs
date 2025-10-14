@@ -1,6 +1,5 @@
 ﻿using System;
 using System.Diagnostics.CodeAnalysis;
-using Reloaded.Memory.Buffers.Internal.Structs;
 using Reloaded.Memory.Sources;
 
 namespace Reloaded.Memory.Buffers

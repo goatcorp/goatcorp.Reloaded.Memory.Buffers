@@ -155,38 +155,16 @@ namespace Reloaded.Memory.Buffers
         /// <param name="retryCount">In the case the memory allocation for a potential location fails; the amount of times memory allocation is to be retried.</param>
         /// <exception cref="System.Exception">Memory allocation failure due to possible race condition with other process/process itself/Windows scheduling.</exception>
         /// <remarks>
-        ///     This function is virtually the same to running <see cref="FindBufferLocation"/> and then running Windows'
-        ///     VirtualAlloc yourself. Except for the extra added safety of mutual exclusion (Mutex) and mitigating a wine bug
-        ///     where allocation can fail on the first free pages repeatedly.
+        ///     This function is equivalent to running <see cref="FindBufferLocation"/> and then running Windows'
+        ///     VirtualAlloc yourself. Except for intruducing no meaningful race here by using VirtualAlloc2.
         ///     The memory is allocated with the PAGE_EXECUTE_READWRITE permissions.
         /// </remarks>
         public BufferAllocationProperties Allocate(int size, nuint minimumAddress = 0x10000, nuint maximumAddress = 0x7FFFFFFF, int retryCount = 3)
         {
-            if (minimumAddress <= 0)
-                throw new ArgumentException("Please do not set the minimum address to 0 or negative. It collides with the return values of Windows API functions" +
-                                            "where e.g. 0 is returned on failure but you can also allocate successfully on 0.");
-            var exception = new Exception();
-            while (minimumAddress < maximumAddress)
-            {
-                try
-                {
-                    return Run(retryCount, () =>
-                    {
-                        var memoryLocation = FindBufferLocation(size, minimumAddress, maximumAddress);
-                        var result = VirtualAllocUtility.VirtualAllocLocal(memoryLocation.MemoryAddress, (ulong)memoryLocation.Size);
-
-                        if (result == UIntPtr.Zero)
-                            throw new Exception("Failed to allocate memory using VirtualAlloc/VirtualAllocEx");
-                        return memoryLocation;
-                    });
-                }
-                catch (Exception e)
-                {
-                    exception = e;
-                    minimumAddress += 0x10000;
-                }
-            }
-            throw exception;
+            var result = VirtualAllocUtility.VirtualAlloc2Local(minimumAddress, maximumAddress, (ulong)size);
+            if (result == UIntPtr.Zero)
+                throw new Exception("Failed to allocate memory using VirtualAlloc2");
+            return new BufferAllocationProperties(result, size);
         }
 
         /// <summary>

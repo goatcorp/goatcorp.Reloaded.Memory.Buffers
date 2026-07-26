@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Diagnostics.CodeAnalysis;
+using System.Threading;
 using Reloaded.Memory.Sources;
 
 namespace Reloaded.Memory.Buffers
@@ -10,10 +11,34 @@ namespace Reloaded.Memory.Buffers
     public unsafe class MemoryBuffer : IDisposable
     {
         /// <summary>
-        /// Userspace lock object for synchronizing access to the <see cref="MemoryBuffer"/>.
+        /// Lock shared by every buffer in the process, to serialize the scanning and allocation paths.
+        /// This is deliberately not per-buffer. Callers (in Reloaded.Hooks) append to a second buffer while
+        /// holding the first one's lock, e.g. reserving an absolute jump's pointer cell while assembling a
+        /// stub. Which buffer serves such a nested request depends on address range and remaining capacity,
+        /// so with per-buffer locks two threads can acquire the same pair of buffers in opposite orders and
+        /// deadlock. This becomes more likely as allocation pressure grows. A single lock can't form a cycle and
+        /// hook creation does not happen frequently so I think this is fine.
         /// </summary>
-        private readonly object _lock = new();
+        internal static readonly object GlobalLock = new();
         
+        private const int LockTimeoutMs = 60_000;
+
+        /// <summary>
+        /// Acquires <see cref="GlobalLock"/> and throws if we can't acquire it in time.
+        /// </summary>
+        /// <param name="lockTaken">Set to true if the lock was acquired. The caller ALWAYS has to release the lock.</param>
+        /// <param name="context">What we are trying to do that requires a lock.</param>
+        /// <exception cref="TimeoutException">The lock could not be acquired within <see cref="LockTimeoutMs"/>.</exception>
+        internal static void EnterGlobalLock(ref bool lockTaken, string context)
+        {
+            Monitor.TryEnter(GlobalLock, LockTimeoutMs, ref lockTaken);
+            if (!lockTaken)
+                throw new TimeoutException(
+                    $"Could not acquire the shared MemoryBuffer lock within {LockTimeoutMs / 1000} seconds ({context}). " +
+                    $"Another thread is likely deadlocked while holding it, e.g. by taking a lock inside an " +
+                    $"{nameof(ExecuteWithLock)} callback that is owned by a thread which is itself appending to a buffer.");
+        }
+
         /// <summary> Defines where Memory will be read in or written to. </summary>
         public IMemory MemorySource   { get; private set; }
 
@@ -67,14 +92,23 @@ namespace Reloaded.Memory.Buffers
         */
 
         /// <summary>
-        /// Locks a buffer from use by other threads and executes a given function.
+        /// Locks all buffers from use by other threads and executes a given function.
+        /// The lock is shared between all buffers and is reentrant. It's safe to append to this or any other buffer
+        /// from inside <paramref name="func"/>.
         /// </summary>
-        /// <param name="func">The function to execute while preventing others' access to the buffer.</param>
+        /// <param name="func">The function to execute while preventing others' access to buffers.</param>
         public T ExecuteWithLock<T>(Func<T> func)
         {
-            lock (_lock)
+            bool lockTaken = false;
+            try
             {
+                EnterGlobalLock(ref lockTaken, $"buffer at 0x{(ulong)_address:X}");
                 return func();
+            }
+            finally
+            {
+                if (lockTaken)
+                    Monitor.Exit(GlobalLock);
             }
         }
 
@@ -111,7 +145,9 @@ namespace Reloaded.Memory.Buffers
                 bufferProperties.SetAlignment(alignment);
 
                 // Check if item can fit in buffer and buffer address is valid.
-                if (Properties.Remaining < numBytes) // Inlined CanItemFit to prevent reading Properties from memory again.
+                // Has to be checked against the realigned copy, the write below happens at its WritePointer,
+                // so checking the unaligned Properties lets a write overrun the buffer by up to alignment-1 bytes
+                if (bufferProperties.Remaining < numBytes)
                     return (nuint)0;
 
                 // Append the item to the buffer.
@@ -140,7 +176,8 @@ namespace Reloaded.Memory.Buffers
                 bufferProperties.SetAlignment(alignment);
 
                 // Check if item can fit in buffer and buffer address is valid.
-                if (Properties.Remaining < bytesToWrite.Length) // Inlined CanItemFit to prevent reading Properties from memory again.
+                // Checked against the re-aligned copy, see the Add(int, int) overload.
+                if (bufferProperties.Remaining < bytesToWrite.Length)
                     return (nuint)0;
 
                 // Append the item to the buffer.
@@ -174,7 +211,8 @@ namespace Reloaded.Memory.Buffers
                 bufferProperties.SetAlignment(alignment);
 
                 // Check if item can fit in buffer and buffer address is valid.
-                if (Properties.Remaining < structLength) // Inlined CanItemFit to prevent reading Properties from memory again.
+                // Checked against the re-aligned copy, see the Add(int, int) overload.
+                if (bufferProperties.Remaining < structLength)
                     return (nuint)0;
 
                 // Append the item to the buffer.

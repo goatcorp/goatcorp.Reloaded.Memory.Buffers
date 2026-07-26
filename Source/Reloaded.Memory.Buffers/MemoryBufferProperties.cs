@@ -26,7 +26,7 @@ namespace Reloaded.Memory.Buffers
         public int Remaining => Size - Offset;
 
         /// <summary> Returns the current write pointer in the buffer. (Address of next element to be written) </summary>
-        public nuint WritePointer => (UIntPtr)DataPointer + Offset;
+        public nuint WritePointer => DataPointer + (nuint)Offset;
 
         /// <summary>
         /// Creates a new <see cref="MemoryBufferProperties"/> given the location of the raw data

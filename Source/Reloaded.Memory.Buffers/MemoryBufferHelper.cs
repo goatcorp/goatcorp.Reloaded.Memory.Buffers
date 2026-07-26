@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Threading;
 using Reloaded.Memory.Buffers.Internal;
 using Reloaded.Memory.Buffers.Internal.Structs;
 using Reloaded.Memory.Buffers.Internal.Utilities;
@@ -10,7 +11,7 @@ using static Reloaded.Memory.Kernel32.Kernel32;
 namespace Reloaded.Memory.Buffers
 {
     /// <summary>
-    /// Provides a a way to detect individual Reloaded buffers inside a process used for general small size memory storage,
+    /// Provides a way to detect individual Reloaded buffers inside a process used for general small size memory storage,
     /// adding buffer information within certain proximity of an address as well as other various utilities partaining to
     /// buffers.
     /// </summary>
@@ -63,15 +64,10 @@ namespace Reloaded.Memory.Buffers
                                             "where e.g. 0 is returned on failure but you can also allocate successfully on 0.");
 
             int bufferSize = GetBufferSize(size);
-            
-            // Not found in cache, get all real pages and try find appropriate spot.
-            var memoryPages = MemoryPages.GetPages(Process);
-            for (int x = 0; x < memoryPages.Count; x++)
-            {
-                var pointer = GetBufferPointerInPageRange(memoryPages[x], bufferSize, minimumAddress, maximumAddress);
-                if (pointer != 0)
-                    return new BufferAllocationProperties(pointer, bufferSize);
-            }
+            var candidates = FindCandidateLocations(bufferSize, minimumAddress, maximumAddress);
+
+            if (candidates.Count > 0)
+                return new BufferAllocationProperties(candidates[0], bufferSize);
 
             throw new Exception($"Unable to find memory location to fit MemoryBuffer of size {size} ({bufferSize}) between {minimumAddress} and {maximumAddress}.");
         }
@@ -90,27 +86,45 @@ namespace Reloaded.Memory.Buffers
             if (minimumAddress <= 0)
                 throw new ArgumentException("Please do not set the minimum address to 0 or negative. It collides with the return values of Windows API functions" +
                                             "where e.g. 0 is returned on failure but you can also allocate successfully on 0.");
-            var exception = new Exception();
-            while (minimumAddress < maximumAddress)
-            {
-                try
-                {
-                    return Run(retryCount, () =>
-                    {
-                        var memoryLocation = FindBufferLocation(size, minimumAddress, maximumAddress);
-                        var buffer = MemoryBufferFactory.CreateBuffer(memoryLocation.MemoryAddress, memoryLocation.Size);
-                        _bufferSearcher.AddBuffer(buffer);
 
-                        return buffer;
-                    });
-                }
-                catch (Exception e)
+            // Serialized so that the scan can't go stale through another of our own threads allocating the
+            // candidate first. Threads outside our control can still, that's what the candidate fallthrough and
+            // retries below are for.
+            bool lockTaken = false;
+            try
+            {
+                MemoryBuffer.EnterGlobalLock(ref lockTaken, nameof(CreateMemoryBuffer));
+                return Run(retryCount, () =>
                 {
-                    exception = e;
-                    minimumAddress += 0x10000;
-                }
+                    int bufferSize = GetBufferSize(size);
+
+                    // Walk the candidates outwards from the middle of the window. A candidate can go stale between the
+                    // scan and the allocation (by basically anything else), so fall through to the next one rather 
+                    // than restarting the whole scan, which would be a waste.
+                    foreach (var candidate in FindCandidateLocations(bufferSize, minimumAddress, maximumAddress))
+                    {
+                        try
+                        {
+                            var buffer = MemoryBufferFactory.CreateBuffer(candidate, bufferSize);
+                            _bufferSearcher.AddBuffer(buffer);
+
+                            return buffer;
+                        }
+                        catch (Exception ex) when (ex is not OutOfMemoryException)
+                        {
+                            // Buffer is probably taken now by something else
+                            // Ignore OOM, not recoverable
+                        }
+                    }
+
+                    throw new Exception($"Unable to find memory location to fit MemoryBuffer of size {size} ({bufferSize}) between {minimumAddress} and {maximumAddress}.");
+                });
             }
-            throw exception;
+            finally
+            {
+                if (lockTaken)
+                    Monitor.Exit(MemoryBuffer.GlobalLock);
+            }
         }
 
         /*
@@ -138,7 +152,7 @@ namespace Reloaded.Memory.Buffers
             foreach (var buffer in buffers)
             {
                 var bufferHeader = buffer.Properties;
-                var bufferAddressRange = new AddressRange(bufferHeader.DataPointer, ((UIntPtr)bufferHeader.DataPointer + bufferHeader.Size));
+                var bufferAddressRange = new AddressRange(bufferHeader.DataPointer, (bufferHeader.DataPointer + (nuint)bufferHeader.Size));
                 if (allowedRange.Contains(ref bufferAddressRange))
                     memoryBuffers.Add(buffer);
             }
@@ -155,16 +169,43 @@ namespace Reloaded.Memory.Buffers
         /// <param name="retryCount">In the case the memory allocation for a potential location fails; the amount of times memory allocation is to be retried.</param>
         /// <exception cref="System.Exception">Memory allocation failure due to possible race condition with other process/process itself/Windows scheduling.</exception>
         /// <remarks>
-        ///     This function is equivalent to running <see cref="FindBufferLocation"/> and then running Windows'
-        ///     VirtualAlloc yourself. Except for intruducing no meaningful race here by using VirtualAlloc2.
+        ///     This function is virtually the same to running <see cref="FindBufferLocation"/> and then running Windows'
+        ///     VirtualAlloc yourself, except that it's safe to call from multiple threads (allocations are serialized
+        ///     within the process), and that losing a candidate address to something outside our control (or a wine bug
+        ///     where allocation can fail on the first free pages repeatedly) is absorbed by falling through to the next
+        ///     candidate address and retrying.
         ///     The memory is allocated with the PAGE_EXECUTE_READWRITE permissions.
         /// </remarks>
         public BufferAllocationProperties Allocate(int size, nuint minimumAddress = 0x10000, nuint maximumAddress = 0x7FFFFFFF, int retryCount = 3)
         {
-            var result = VirtualAllocUtility.VirtualAlloc2Local(minimumAddress, maximumAddress, (ulong)size);
-            if (result == UIntPtr.Zero)
-                throw new Exception("Failed to allocate memory using VirtualAlloc2");
-            return new BufferAllocationProperties(result, size);
+            if (minimumAddress <= 0)
+                throw new ArgumentException("Please do not set the minimum address to 0 or negative. It collides with the return values of Windows API functions" +
+                                            "where e.g. 0 is returned on failure but you can also allocate successfully on 0.");
+
+            // See CreateMemoryBuffer for why allocation is serialized, and why the lock is taken this way.
+            bool lockTaken = false;
+            try
+            {
+                MemoryBuffer.EnterGlobalLock(ref lockTaken, nameof(Allocate));
+                return Run(retryCount, () =>
+                {
+                    int bufferSize = GetBufferSize(size);
+
+                    // See CreateMemoryBuffer: try successively further candidates rather than restarting the scan.
+                    foreach (var candidate in FindCandidateLocations(bufferSize, minimumAddress, maximumAddress))
+                    {
+                        if (VirtualAllocUtility.VirtualAllocLocal(candidate, (ulong)bufferSize) != UIntPtr.Zero)
+                            return new BufferAllocationProperties(candidate, bufferSize);
+                    }
+
+                    throw new Exception($"Unable to find memory location to fit allocation of size {size} ({bufferSize}) between {minimumAddress} and {maximumAddress}.");
+                });
+            }
+            finally
+            {
+                if (lockTaken)
+                    Monitor.Exit(MemoryBuffer.GlobalLock);
+            }
         }
 
         /// <summary>
@@ -191,17 +232,24 @@ namespace Reloaded.Memory.Buffers
         /// <returns>A calculated buffer size based off of the requested capacity in bytes.</returns>
         public int GetBufferSize(int size)
         {
-            // Get size of buffer; allocation granularity or larger if greater than the granularity.
             GetSystemInfo(out var systemInfo);
 
-            // Guard to ensure that page size is at least the minimum supported by the processor
-            // While Reloaded is only intended for X86/64; this may be useful in the future.
-            // The second guard ensured the default page size is aligned with the system info.
+            // Round to the allocation granularity instead of page size. VirtualAlloc will only accept a base address
+            // that is a multiple of dwAllocationGranularity, so a buffer rounded to the 4KB page size still exhausts
+            // a full granule. The remaining 60KB reads as MEM_FREE but can never be the base of another allocation.
+            // Committing the whole granule costs memory we had already given up the address space for, and raises
+            // the number of items a single buffer can hold.
+            int granularity = (int)systemInfo.dwAllocationGranularity;
+
+            // We only care about x64 but let's make sure anyway
             int pageSize = DefaultPageSize;
             if (systemInfo.dwPageSize > pageSize || (pageSize % systemInfo.dwPageSize != 0))
                 pageSize = (int)systemInfo.dwPageSize;
 
-            return Mathematics.RoundUp(size, pageSize);
+            if (granularity < pageSize)
+                granularity = pageSize;
+
+            return Mathematics.RoundUp(size, granularity);
         }
 
 
@@ -217,6 +265,8 @@ namespace Reloaded.Memory.Buffers
             for (int x = 0; x < retries; x++)
             {
                 try  { return function();  }
+                // Give up immediately if system is OOM
+                catch (OutOfMemoryException) { throw; }
                 catch (Exception ex) { caughtException = ex; }
             }
 
@@ -224,15 +274,52 @@ namespace Reloaded.Memory.Buffers
         }
 
         /// <summary>
-        /// Checks if a buffer can be created within a given set of pages described by pageInfo
-        /// satisfying the given size, minimum and maximum memory location.
+        /// Finds every location at which a buffer of the given size could be placed inside the given address range,
+        /// ordered by proximity to the middle of that range.
         /// </summary>
-        /// <param name="pageInfo">Contains the information about a singular memory page.</param>
-        /// <param name="bufferSize">The size that a <see cref="MemoryBuffer"/> would occupy. Pre-aligned to page-size.</param>
-        /// <param name="minimumPtr">The maximum pointer a <see cref="MemoryBuffer"/> can occupy.</param>
-        /// <param name="maximumPtr">The minimum pointer a <see cref="MemoryBuffer"/> can occupy.</param>
-        /// <returns>Zero if the operation fails; otherwise positive value.</returns>
-        private nuint GetBufferPointerInPageRange(in MEMORY_BASIC_INFORMATION pageInfo, int bufferSize, nuint minimumPtr, nuint maximumPtr)
+        /// <param name="bufferSize">The size a <see cref="MemoryBuffer"/> would occupy, as returned by <see cref="GetBufferSize"/>.</param>
+        /// <param name="minimumAddress">The minimum absolute address a <see cref="MemoryBuffer"/> may occupy.</param>
+        /// <param name="maximumAddress">The maximum absolute address a <see cref="MemoryBuffer"/> may occupy.</param>
+        /// <returns>Candidate base addresses, nearest-first. Empty if the range cannot fit a buffer.</returns>
+        private List<nuint> FindCandidateLocations(int bufferSize, nuint minimumAddress, nuint maximumAddress)
+        {
+            // Callers derive the range as "a target address, plus or minus the reach of a relative jump", so the
+            // middle of the range is the address the caller actually wants to be near. Placing buffers there rather
+            // than in the first free region above minimumAddress keeps them within range of later requests made
+            // around neighboring targets, letting us reuse them instead of wasting one more granule every time.
+            
+            nuint preferred = minimumAddress + ((maximumAddress - minimumAddress) / 2);
+
+            var memoryPages = MemoryPages.GetPages(Process);
+            var candidates  = new List<(nuint Pointer, nuint Distance)>();
+
+            for (int x = 0; x < memoryPages.Count; x++)
+            {
+                var pointer = GetBufferPointerNearest(memoryPages[x], bufferSize, minimumAddress, maximumAddress, preferred);
+                if (pointer != 0)
+                    candidates.Add((pointer, pointer > preferred ? pointer - preferred : preferred - pointer));
+            }
+
+            candidates.Sort((a, b) => a.Distance < b.Distance ? -1 : (a.Distance > b.Distance ? 1 : 0));
+
+            var result = new List<nuint>(candidates.Count);
+            foreach (var candidate in candidates)
+                result.Add(candidate.Pointer);
+
+            return result;
+        }
+
+        /// <summary>
+        /// Returns the base address closest to <paramref name="preferred"/> at which a buffer of the given size fits
+        /// entirely inside both the given free region and the given address range.
+        /// </summary>
+        /// <param name="pageInfo">Information about a single memory region.</param>
+        /// <param name="bufferSize">The size that a <see cref="MemoryBuffer"/> would occupy.</param>
+        /// <param name="minimumPtr">The minimum pointer a <see cref="MemoryBuffer"/> can occupy.</param>
+        /// <param name="maximumPtr">The maximum pointer a <see cref="MemoryBuffer"/> can occupy.</param>
+        /// <param name="preferred">The address the buffer would ideally sit closest to.</param>
+        /// <returns>Zero if no such address exists; otherwise a positive value.</returns>
+        private static nuint GetBufferPointerNearest(in MEMORY_BASIC_INFORMATION pageInfo, int bufferSize, nuint minimumPtr, nuint maximumPtr, nuint preferred)
         {
             // Fast return if page is not free.
             if (pageInfo.State != (uint)MEM_ALLOCATION_TYPE.MEM_FREE)
@@ -242,65 +329,39 @@ namespace Reloaded.Memory.Buffers
             // We can call GetSystemInfo to get this but that's a waste; these are constant for x86 and x64.
             nuint allocationGranularity = 65536;
 
-            // Do not align page start/end to allocation granularity yet.
-            // Align it when we map the possible buffer ranges in the pages.
             nuint pageStart = (nuint)pageInfo.BaseAddress;
-            nuint pageEnd   = (nuint)pageInfo.BaseAddress + (nuint)pageInfo.RegionSize;
+            nuint pageEnd   = pageStart + (nuint)pageInfo.RegionSize;
 
-            // Get range for page and min-max region.
-            var minMaxRange  = new AddressRange(minimumPtr, maximumPtr);
-            var pageRange    = new AddressRange(pageStart, pageEnd);
-
-            if (! pageRange.Overlaps(ref minMaxRange))
+            if (pageEnd < pageStart)
                 return 0;
 
-            /* Three possible cases here:
-               1. Page fits entirely inside min-max range and is smaller.
-               2. Min-max range is inside page (i.e. page is bigger than the range)
-               3. Page and min-max intersect, e.g. first half of pages in end of min-max
-                  or second half of pages in start of min-max.
+            // Intersect the free region with the caller's range.
+            nuint lowest  = pageStart > minimumPtr ? pageStart : minimumPtr;
+            nuint highest = pageEnd   < maximumPtr ? pageEnd   : maximumPtr;
 
-               Below we will build a set of possible buffer allocation ranges
-               and check if they satisfy our conditions.
-            */
+            if (highest < lowest || highest - lowest < (nuint)bufferSize)
+                return 0;
 
-            /* Try placing range at start and end of page boundaries.
-               Since we are allocating in page boundaries, we must compare against Min-Max. */
+            // VirtualAlloc only accepts a base that is a multiple of the allocation granularity, so the usable
+            // bases within the intersection are the granule boundaries from `first` to `last` inclusive.
+            nuint first = Mathematics.RoundUp(lowest, allocationGranularity);
+            if (first < lowest) // Rounding wrapped past the top of the address space.
+                return 0;
 
-            // Note: We are rounding page boundary addresses up/down, possibly beyond the original ends/starts of page.
-            //       We need to validate that we are still in the bounds of the actual page itself.
+            nuint last = Mathematics.RoundDown(highest - (nuint)bufferSize, allocationGranularity);
+            if (last < first)
+                return 0;
 
-            var allocPtrPageMaxAligned = Mathematics.RoundDown((UIntPtr)pageRange.EndPointer - bufferSize, allocationGranularity);
-            var allocRangePageMaxStart = new AddressRange(allocPtrPageMaxAligned, (UIntPtr)allocPtrPageMaxAligned + bufferSize);
+            // Clamp the preferred address into [first, last]
+            if (preferred <= first)
+                return first;
 
-            if (pageRange.Contains(ref allocRangePageMaxStart) && minMaxRange.Contains(ref allocRangePageMaxStart))
-                return (nuint)allocRangePageMaxStart.StartPointer;
+            if (preferred >= last)
+                return last;
 
-            var allocPtrPageMinAligned = Mathematics.RoundUp(pageRange.StartPointer, allocationGranularity);
-            var allocRangePageMinStart = new AddressRange(allocPtrPageMinAligned, (UIntPtr)allocPtrPageMinAligned + bufferSize);
-
-            if (pageRange.Contains(ref allocRangePageMinStart) && minMaxRange.Contains(ref allocRangePageMinStart))
-                return (nuint)allocRangePageMinStart.StartPointer;
-
-            /* Try placing range at start and end of given minimum-maximum.
-               Since we are allocating in Min-Max, we must compare against Page Boundaries. */
-
-            // Note: Remember that rounding is dangerous and could potentially cause max and min to cross as usual,
-            //       must check proposed page range against both given min-max and page memory range.
-
-            var allocPtrMaxAligned = Mathematics.RoundDown((UIntPtr)maximumPtr - bufferSize, allocationGranularity);
-            var allocRangeMaxStart = new AddressRange(allocPtrMaxAligned, (UIntPtr)allocPtrMaxAligned + bufferSize);
-
-            if (pageRange.Contains(ref allocRangeMaxStart) && minMaxRange.Contains(ref allocRangeMaxStart))
-                return allocRangeMaxStart.StartPointer;
-
-            var allocPtrMinAligned = Mathematics.RoundUp(minimumPtr, allocationGranularity);
-            var allocRangeMinStart = new AddressRange(allocPtrMinAligned, (UIntPtr)allocPtrMinAligned + bufferSize);
-
-            if (pageRange.Contains(ref allocRangeMinStart) && minMaxRange.Contains(ref allocRangeMinStart))
-                return allocRangeMinStart.StartPointer;
-
-            return 0;
+            // Snap to granule boundary
+            nuint snapped = Mathematics.RoundDown(preferred, allocationGranularity);
+            return snapped < first ? first : snapped;
         }
     }
 }

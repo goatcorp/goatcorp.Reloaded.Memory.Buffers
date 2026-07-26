@@ -1,7 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFrameworks>netstandard2.0;netstandard2.1;net6.0</TargetFrameworks>
+    <TargetFrameworks>netstandard2.0;netstandard2.1;net10.0</TargetFrameworks>
     <RootNamespace>Reloaded.Memory.Buffers</RootNamespace>
     <PackageId>goatcorp.Reloaded.Memory.Buffers</PackageId>
     <AssemblyName>goatcorp.Reloaded.Memory.Buffers</AssemblyName>
@@ -13,8 +13,8 @@
     <RepositoryUrl>https://github.com/Reloaded-Project/Reloaded.Memory.Buffers</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <Description>An implementation of efficient, shared, concurrent and permanent storage of objects in unmanaged memory in static, non-changing locations that last the lifetime of a given process.</Description>
-    <Version>2.0.0-goatcorp8</Version>
-    <Authors>Sewer56</Authors>
+    <Version>2.0.0-goatcorp9</Version>
+    <Authors>Sewer56, goaaats</Authors>
     <Company></Company>
     <Product>Project Reloaded</Product>
     <Copyright>LGPL V3</Copyright>
@@ -23,8 +23,6 @@
     <PackageLicenseFile>LICENSE</PackageLicenseFile>
     <PackageIcon>Icon.png</PackageIcon>
 	<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <IsTrimmable>true</IsTrimmable>
-    <EnableTrimAnalyzer>true</EnableTrimAnalyzer>
   </PropertyGroup>
 
   <ItemGroup>

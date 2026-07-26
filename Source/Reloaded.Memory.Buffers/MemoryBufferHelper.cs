@@ -19,7 +19,13 @@ namespace Reloaded.Memory.Buffers
     {
         /// <summary> Contains the default size of memory pages to be allocated. </summary>
         internal const int DefaultPageSize = 0x1000;
-        
+
+        // How far either side of the preferred address we let the kernel place an allocation
+        // Arbitrarily picked, seems fine for now. This is only here to improve chances of buffer
+        // reuse, because windows seems to always pick the first free granule going up from the
+        // minimum address
+        private static readonly nuint[] WindowHalfWidths = [0x100000, 0x1000000, 0x10000000, 0];
+
         /// <summary> Implementation of the Searcher that scans and finds existing <see cref="MemoryBuffer"/>s within the current process. </summary>
         private readonly MemoryBufferSearcher _bufferSearcher = new();
 
@@ -87,9 +93,9 @@ namespace Reloaded.Memory.Buffers
                 throw new ArgumentException("Please do not set the minimum address to 0 or negative. It collides with the return values of Windows API functions" +
                                             "where e.g. 0 is returned on failure but you can also allocate successfully on 0.");
 
-            // Serialized so that the scan can't go stale through another of our own threads allocating the
-            // candidate first. Threads outside our control can still, that's what the candidate fallthrough and
-            // retries below are for.
+            // Serialized so that the scan in the fallback path can't go stale through another of our own threads
+            // allocating the candidate first, and so that registering the buffer stays consistent with allocating it.
+            // Threads outside our control can still take a candidate, that's what the fallthrough and retries are for.
             bool lockTaken = false;
             try
             {
@@ -97,27 +103,16 @@ namespace Reloaded.Memory.Buffers
                 return Run(retryCount, () =>
                 {
                     int bufferSize = GetBufferSize(size);
+                    var address    = AllocateInRange(bufferSize, minimumAddress, maximumAddress);
 
-                    // Walk the candidates outwards from the middle of the window. A candidate can go stale between the
-                    // scan and the allocation (by basically anything else), so fall through to the next one rather 
-                    // than restarting the whole scan, which would be a waste.
-                    foreach (var candidate in FindCandidateLocations(bufferSize, minimumAddress, maximumAddress))
-                    {
-                        try
-                        {
-                            var buffer = MemoryBufferFactory.CreateBuffer(candidate, bufferSize);
-                            _bufferSearcher.AddBuffer(buffer);
+                    if (address == 0)
+                        throw new Exception($"Unable to find memory location to fit MemoryBuffer of size {size} ({bufferSize}) between {minimumAddress} and {maximumAddress}.");
 
-                            return buffer;
-                        }
-                        catch (Exception ex) when (ex is not OutOfMemoryException)
-                        {
-                            // Buffer is probably taken now by something else
-                            // Ignore OOM, not recoverable
-                        }
-                    }
+                    // Memory is already reserved and committed by AllocateInRange
+                    var buffer = MemoryBufferFactory.CreateBuffer(address, bufferSize, allocateMemory: false);
+                    _bufferSearcher.AddBuffer(buffer);
 
-                    throw new Exception($"Unable to find memory location to fit MemoryBuffer of size {size} ({bufferSize}) between {minimumAddress} and {maximumAddress}.");
+                    return buffer;
                 });
             }
             finally
@@ -170,8 +165,9 @@ namespace Reloaded.Memory.Buffers
         /// <exception cref="System.Exception">Memory allocation failure due to possible race condition with other process/process itself/Windows scheduling.</exception>
         /// <remarks>
         ///     This function is virtually the same to running <see cref="FindBufferLocation"/> and then running Windows'
-        ///     VirtualAlloc yourself, except that it's safe to call from multiple threads (allocations are serialized
-        ///     within the process), and that losing a candidate address to something outside our control (or a wine bug
+        ///     VirtualAlloc yourself, except that it's safe to call from multiple threads. Where VirtualAlloc2 is
+        ///     available the kernel picks the address, so there is no window in which the address can be taken from
+        ///     under us; where it isn't, losing a candidate address to something outside our control (or a wine bug
         ///     where allocation can fail on the first free pages repeatedly) is absorbed by falling through to the next
         ///     candidate address and retrying.
         ///     The memory is allocated with the PAGE_EXECUTE_READWRITE permissions.
@@ -190,13 +186,10 @@ namespace Reloaded.Memory.Buffers
                 return Run(retryCount, () =>
                 {
                     int bufferSize = GetBufferSize(size);
+                    var address    = AllocateInRange(bufferSize, minimumAddress, maximumAddress);
 
-                    // See CreateMemoryBuffer: try successively further candidates rather than restarting the scan.
-                    foreach (var candidate in FindCandidateLocations(bufferSize, minimumAddress, maximumAddress))
-                    {
-                        if (VirtualAllocUtility.VirtualAllocLocal(candidate, (ulong)bufferSize) != UIntPtr.Zero)
-                            return new BufferAllocationProperties(candidate, bufferSize);
-                    }
+                    if (address != 0)
+                        return new BufferAllocationProperties(address, bufferSize);
 
                     throw new Exception($"Unable to find memory location to fit allocation of size {size} ({bufferSize}) between {minimumAddress} and {maximumAddress}.");
                 });
@@ -274,6 +267,80 @@ namespace Reloaded.Memory.Buffers
         }
 
         /// <summary>
+        /// Get an "optimal" address to find our buffer around.
+        /// </summary>
+        /// <param name="minimumAddress">The minimum absolute address the allocation may occupy.</param>
+        /// <param name="maximumAddress">The maximum absolute address the allocation may occupy.</param>
+        /// <returns></returns>
+        private nuint GetPreferredAddress(nuint minimumAddress, nuint maximumAddress)
+        {
+            // Callers derive the range as "a target address, plus or minus the reach of a relative jump", so the
+            // middle of the range is the address the caller actually wants to be near. Placing buffers there rather
+            // than at the edges of the range keeps them within range of later requests made around neighboring
+            // targets, letting us reuse them instead of wasting one more granule every time.
+            return minimumAddress + ((maximumAddress - minimumAddress) / 2);
+        }
+
+        /// <summary>
+        /// Reserves and commits <paramref name="bufferSize"/> bytes inside the given address range, as close to the
+        /// middle of that range as we can manage.
+        /// </summary>
+        /// <param name="bufferSize">The size to allocate, as returned by <see cref="GetBufferSize"/>.</param>
+        /// <param name="minimumAddress">The minimum absolute address the allocation may occupy.</param>
+        /// <param name="maximumAddress">The maximum absolute address the allocation may occupy.</param>
+        /// <returns>The base address of the allocation, or zero if the range could not be satisfied.</returns>
+        private nuint AllocateInRange(int bufferSize, nuint minimumAddress, nuint maximumAddress)
+        {
+            nuint preferred = GetPreferredAddress(minimumAddress, maximumAddress);
+
+            if (VirtualAllocUtility.IsVirtualAlloc2Available)
+            {
+                // MEM_ADDRESS_REQUIREMENTS has no notion of a preferred address, only of a permitted range, and the
+                // kernel is free to place us anywhere inside it (which it seems to do bottom up)
+                // Go broad only if we can't find something close to where we actually need to be
+                nuint lastLow = 0, lastHigh = 0;
+
+                foreach (var halfWidth in WindowHalfWidths)
+                {
+                    nuint low  = minimumAddress;
+                    nuint high = maximumAddress;
+
+                    if (halfWidth != 0)
+                    {
+                        // preferred is always inside [minimumAddress, maximumAddress]
+                        if (preferred - minimumAddress > halfWidth)
+                            low = preferred - halfWidth;
+
+                        if (maximumAddress - preferred > halfWidth)
+                            high = preferred + halfWidth;
+                    }
+
+                    // A range smaller than the first window collapses to the full range on every pass.
+                    if (low == lastLow && high == lastHigh)
+                        continue;
+
+                    lastLow  = low;
+                    lastHigh = high;
+
+                    var result = VirtualAllocUtility.VirtualAlloc2Local(low, high, (ulong)bufferSize);
+                    if (result != UIntPtr.Zero)
+                        return result;
+                }
+
+                return 0;
+            }
+
+            // No VirtualAlloc2, do the old allocation logic
+            foreach (var candidate in FindCandidateLocations(bufferSize, minimumAddress, maximumAddress))
+            {
+                if (VirtualAllocUtility.VirtualAllocLocal(candidate, (ulong)bufferSize) != UIntPtr.Zero)
+                    return candidate;
+            }
+
+            return 0;
+        }
+
+        /// <summary>
         /// Finds every location at which a buffer of the given size could be placed inside the given address range,
         /// ordered by proximity to the middle of that range.
         /// </summary>
@@ -283,12 +350,7 @@ namespace Reloaded.Memory.Buffers
         /// <returns>Candidate base addresses, nearest-first. Empty if the range cannot fit a buffer.</returns>
         private List<nuint> FindCandidateLocations(int bufferSize, nuint minimumAddress, nuint maximumAddress)
         {
-            // Callers derive the range as "a target address, plus or minus the reach of a relative jump", so the
-            // middle of the range is the address the caller actually wants to be near. Placing buffers there rather
-            // than in the first free region above minimumAddress keeps them within range of later requests made
-            // around neighboring targets, letting us reuse them instead of wasting one more granule every time.
-            
-            nuint preferred = minimumAddress + ((maximumAddress - minimumAddress) / 2);
+            nuint preferred = GetPreferredAddress(minimumAddress, maximumAddress);
 
             var memoryPages = MemoryPages.GetPages(Process);
             var candidates  = new List<(nuint Pointer, nuint Distance)>();

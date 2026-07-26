@@ -1,7 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFrameworks>netstandard2.0;netstandard2.1;net10.0</TargetFrameworks>
+    <TargetFramework>net10.0</TargetFramework>
     <RootNamespace>Reloaded.Memory.Buffers</RootNamespace>
     <PackageId>goatcorp.Reloaded.Memory.Buffers</PackageId>
     <AssemblyName>goatcorp.Reloaded.Memory.Buffers</AssemblyName>
@@ -38,7 +38,6 @@
 
   <ItemGroup>
     <PackageReference Include="Reloaded.Memory" Version="7.0.0" />
-    <PackageReference Include="System.Runtime.CompilerServices.Unsafe" Version="4.7.1" Condition="'$(TargetFramework)' != 'net5.0' And '$(TargetFramework)' != 'net6.0'" />
   </ItemGroup>
 
 </Project>

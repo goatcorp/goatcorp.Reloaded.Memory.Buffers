@@ -133,7 +133,7 @@ namespace Reloaded.Memory.Buffers.Tests
             nuint bufferStartPtr = bufferHeader.DataPointer;
             for (int x = 0; x < itemsToFit; x++)
             {
-                nuint readAddress = (UIntPtr)bufferStartPtr + (x * structSize);
+                nuint readAddress = bufferStartPtr + (nuint)(x * structSize);
 
                 // Read back and compare.
                 externalMemory.Read(readAddress, out RandomIntStruct actual);
@@ -173,7 +173,7 @@ namespace Reloaded.Memory.Buffers.Tests
             nuint bufferStartPtr = bufferHeader.DataPointer;
             for (int x = 0; x < remainingBufferSpace; x++)
             {
-                nuint readAddress = (UIntPtr)bufferStartPtr + x;
+                nuint readAddress = bufferStartPtr + (nuint)x;
 
                 // Read back and compare.
                 externalMemory.Read(readAddress, out byte actual);

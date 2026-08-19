@@ -1,6 +1,7 @@
 using System;
 using System.Runtime.InteropServices;
 using System.Security;
+using static Reloaded.Memory.Buffers.Internal.Kernel32.Kernel32;
 using static Reloaded.Memory.Kernel32.Kernel32;
 
 namespace Reloaded.Memory.Buffers.Internal.Utilities
@@ -11,14 +12,38 @@ namespace Reloaded.Memory.Buffers.Internal.Utilities
         private const int ERROR_OUTOFMEMORY = 14; // "Not enough storage is available to complete this operation."
         private const int ERROR_COMMITMENT_LIMIT = 1455; // "The paging file is too small for this operation to complete."
 
-        internal const nuint AllocationGranularity = 65536;
-
         private const uint MEM_RESERVE_COMMIT = (uint)(MEM_ALLOCATION_TYPE.MEM_RESERVE | MEM_ALLOCATION_TYPE.MEM_COMMIT);
         private const uint PAGE_EXECUTE_READWRITE  = (uint)MEM_PROTECTION.PAGE_EXECUTE_READWRITE;
 
+        /// <summary>
+        /// The granularity every allocation base address is aligned to.
+        /// </summary>
+        internal static readonly nuint AllocationGranularity;
+        
+        private static readonly nuint LowestAllowedAddress;
+        private static readonly nuint HighestAllowedAddress;
+
         // Not readonly so that tests can force the legacy path
         private static bool CanUseVirtualAlloc2 = ProbeVirtualAlloc2();
-        
+
+        static VirtualAllocUtility()
+        {
+            GetSystemInfo(out var systemInfo);
+
+            AllocationGranularity = systemInfo.dwAllocationGranularity != 0 ? systemInfo.dwAllocationGranularity : 65536;
+            HighestAllowedAddress = systemInfo.lpMaximumApplicationAddress;
+
+            // Not allowed to hand out the first granule
+            nuint granularityMask = AllocationGranularity - 1;
+            LowestAllowedAddress  = (systemInfo.lpMinimumApplicationAddress + granularityMask) & ~granularityMask;
+            if (LowestAllowedAddress < AllocationGranularity)
+                LowestAllowedAddress = AllocationGranularity;
+
+            // Can't use VirtualAlloc2 at all if we can't derive the max allowable address
+            if (HighestAllowedAddress <= LowestAllowedAddress)
+                CanUseVirtualAlloc2 = false;
+        }
+
         internal static bool IsVirtualAlloc2Available => CanUseVirtualAlloc2;
         
         public static UIntPtr VirtualAllocLocal(nuint address, ulong size)
@@ -32,11 +57,7 @@ namespace Reloaded.Memory.Buffers.Internal.Utilities
             );
 
             if (result == UIntPtr.Zero)
-            {
-                var error = Marshal.GetLastWin32Error();
-                if (error == ERROR_NOT_ENOUGH_MEMORY || error == ERROR_OUTOFMEMORY || error == ERROR_COMMITMENT_LIMIT)
-                    throw new OutOfMemoryException($"VirtualAlloc failed because the system is out of memory (Win32 error {error})");
-            }
+                ThrowIfOutOfMemory(nameof(VirtualAlloc));
 
             return result;
         }
@@ -50,16 +71,23 @@ namespace Reloaded.Memory.Buffers.Internal.Utilities
             nuint granMask = AllocationGranularity - 1;
             
             nuint low = (minimumAddress + granMask) & ~granMask;
+            
+            // Rounding up overflowed?
             if (low < minimumAddress)
                 return UIntPtr.Zero;
 
-            if (low < 0x10000)
-                low = 0x10000;
-            
-            if (maximumAddress <= (nuint)Environment.SystemPageSize)
+            if (low < LowestAllowedAddress)
+                low = LowestAllowedAddress;
+
+            nuint maxAddress = maximumAddress;
+            if (maxAddress > HighestAllowedAddress)
+                maxAddress = HighestAllowedAddress;
+
+            // Can't round down, bail out
+            if (maxAddress < granMask)
                 return UIntPtr.Zero;
 
-            nuint high = (maximumAddress & ~pageMask) - 1;
+            nuint high = ((maxAddress + 1) & ~granMask) - 1;
             if (high <= low)
                 return UIntPtr.Zero;
 
@@ -99,15 +127,21 @@ namespace Reloaded.Memory.Buffers.Internal.Utilities
             );
 
             if (result == UIntPtr.Zero)
-            {
-                var error = Marshal.GetLastWin32Error();
-                if (error == ERROR_COMMITMENT_LIMIT)
-                    throw new OutOfMemoryException($"VirtualAlloc2 failed because the system is out of memory (Win32 error {error})");
-            }
+                ThrowIfOutOfMemory(nameof(VirtualAlloc2));
 
             return result;
         }
-        
+
+        /// <summary>
+        /// Turns a pending win32 error into an exception, if we are out of memory.
+        /// </summary>
+        private static void ThrowIfOutOfMemory(string function)
+        {
+            var error = Marshal.GetLastWin32Error();
+            if (error == ERROR_NOT_ENOUGH_MEMORY || error == ERROR_OUTOFMEMORY || error == ERROR_COMMITMENT_LIMIT)
+                throw new OutOfMemoryException($"{function} failed because the system is out of memory (Win32 error {error})");
+        }
+
         private static bool ProbeVirtualAlloc2()
         {
             try

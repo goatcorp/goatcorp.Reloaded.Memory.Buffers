@@ -67,6 +67,44 @@ namespace Reloaded.Memory.Buffers.Tests
             }
         }
 
+        /// <summary>
+        /// Allocating in a range that runs past the end of the address space the process is allowed to use should
+        /// still succeed.
+        /// </summary>
+        [Fact]
+        private void AllocateInUnboundedRange()
+        {
+            var buf = _bufferHelper.Allocate(4096, 0x10000, nuint.MaxValue);
+            try
+            {
+                Assert.InRange(buf.MemoryAddress, (nuint)0x10000, GetMaxAddress(_bufferHelper));
+            }
+            finally
+            {
+                _bufferHelper.Free(buf.MemoryAddress);
+            }
+        }
+
+        /// <summary>
+        /// Neither end of the requested range has to be aligned to anything, we do it.
+        /// </summary>
+        [Fact]
+        private void AllocateInUnalignedRange()
+        {
+            nuint minimumAddress = 0x10001;
+            nuint maximumAddress = 0x7FFFFABC;
+
+            var buf = _bufferHelper.Allocate(4096, minimumAddress, maximumAddress);
+            try
+            {
+                Assert.InRange(buf.MemoryAddress, minimumAddress, maximumAddress);
+            }
+            finally
+            {
+                _bufferHelper.Free(buf.MemoryAddress);
+            }
+        }
+
         [Fact]
         private void AllocateConcurrent()
         {

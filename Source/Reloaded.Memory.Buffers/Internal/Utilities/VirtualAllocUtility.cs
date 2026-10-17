@@ -46,8 +46,12 @@ namespace Reloaded.Memory.Buffers.Internal.Utilities
 
         internal static bool IsVirtualAlloc2Available => CanUseVirtualAlloc2;
         
-        public static UIntPtr VirtualAllocLocal(nuint address, ulong size)
+        public static UIntPtr VirtualAllocLocal(nuint address, ulong size) => VirtualAllocLocal(address, size, out _);
+
+        public static UIntPtr VirtualAllocLocal(nuint address, ulong size, out AllocationAttempt attempt)
         {
+            nuint lastByte = size > 0 ? address + (nuint)size - 1 : address;
+
             var result = VirtualAlloc
             (
                 address,
@@ -56,13 +60,25 @@ namespace Reloaded.Memory.Buffers.Internal.Utilities
                 PAGE_EXECUTE_READWRITE
             );
 
-            if (result == UIntPtr.Zero)
-                ThrowIfOutOfMemory(nameof(VirtualAlloc));
+            if (result != UIntPtr.Zero)
+            {
+                attempt = new AllocationAttempt(AllocationMethod.VirtualAlloc, AllocationOutcome.Succeeded, address, lastByte);
+                return result;
+            }
+
+            var error = Marshal.GetLastWin32Error();
+            attempt = new AllocationAttempt(AllocationMethod.VirtualAlloc, AllocationOutcome.KernelRefused, address, lastByte, error);
+
+            if (error is ERROR_NOT_ENOUGH_MEMORY or ERROR_OUTOFMEMORY or ERROR_COMMITMENT_LIMIT)
+                ThrowOutOfMemory(nameof(VirtualAlloc), error);
 
             return result;
         }
-        
-        public static unsafe UIntPtr VirtualAlloc2Local(nuint minimumAddress, nuint maximumAddress, ulong size)
+
+        public static unsafe UIntPtr VirtualAlloc2Local(nuint minimumAddress, nuint maximumAddress, ulong size) =>
+            VirtualAlloc2Local(minimumAddress, maximumAddress, size, out _);
+
+        public static unsafe UIntPtr VirtualAlloc2Local(nuint minimumAddress, nuint maximumAddress, ulong size, out AllocationAttempt attempt)
         {
             if (!CanUseVirtualAlloc2)
                 throw new InvalidOperationException("VirtualAlloc2 is not available");
@@ -71,10 +87,10 @@ namespace Reloaded.Memory.Buffers.Internal.Utilities
             nuint granMask = AllocationGranularity - 1;
             
             nuint low = (minimumAddress + granMask) & ~granMask;
-            
+
             // Rounding up overflowed?
             if (low < minimumAddress)
-                return UIntPtr.Zero;
+                return Unusable(minimumAddress, maximumAddress, out attempt);
 
             if (low < LowestAllowedAddress)
                 low = LowestAllowedAddress;
@@ -85,19 +101,22 @@ namespace Reloaded.Memory.Buffers.Internal.Utilities
 
             // Can't round down, bail out
             if (maxAddress < granMask)
-                return UIntPtr.Zero;
+                return Unusable(minimumAddress, maximumAddress, out attempt);
 
             nuint high = ((maxAddress + 1) & ~granMask) - 1;
             if (high <= low)
-                return UIntPtr.Zero;
+                return Unusable(minimumAddress, maximumAddress, out attempt);
 
             nuint allocSize = ((nuint)size + pageMask) & ~pageMask;
             if (allocSize < (nuint)size)
-                return UIntPtr.Zero;
-            
+                return Unusable(minimumAddress, maximumAddress, out attempt);
+
             // Not going to fit
-            if (high - low < allocSize - 1) 
+            if (high - low < allocSize - 1)
+            {
+                attempt = new AllocationAttempt(AllocationMethod.VirtualAlloc2, AllocationOutcome.RangeTooSmall, low, high);
                 return UIntPtr.Zero;
+            }
 
             var requirements = new MEM_ADDRESS_REQUIREMENTS
             {
@@ -126,21 +145,35 @@ namespace Reloaded.Memory.Buffers.Internal.Utilities
                 (uint)parameters.Length
             );
 
-            if (result == UIntPtr.Zero)
-                ThrowIfOutOfMemory(nameof(VirtualAlloc2));
+            if (result != UIntPtr.Zero)
+            {
+                attempt = new AllocationAttempt(AllocationMethod.VirtualAlloc2, AllocationOutcome.Succeeded, low, high);
+                return result;
+            }
+
+            var error = Marshal.GetLastWin32Error();
+            attempt = new AllocationAttempt(AllocationMethod.VirtualAlloc2, AllocationOutcome.KernelRefused, low, high, error);
+            
+            if (error is ERROR_OUTOFMEMORY or ERROR_COMMITMENT_LIMIT)
+                ThrowOutOfMemory(nameof(VirtualAlloc2), error);
 
             return result;
         }
 
         /// <summary>
-        /// Turns a pending win32 error into an exception, if we are out of memory.
+        /// Records a range that couldn't be turned into something VirtualAlloc2 would accept.
         /// </summary>
-        private static void ThrowIfOutOfMemory(string function)
+        private static UIntPtr Unusable(nuint minimumAddress, nuint maximumAddress, out AllocationAttempt attempt)
         {
-            var error = Marshal.GetLastWin32Error();
-            if (error == ERROR_NOT_ENOUGH_MEMORY || error == ERROR_OUTOFMEMORY || error == ERROR_COMMITMENT_LIMIT)
-                throw new OutOfMemoryException($"{function} failed because the system is out of memory (Win32 error {error})");
+            attempt = new AllocationAttempt(AllocationMethod.VirtualAlloc2, AllocationOutcome.RangeUnusable, minimumAddress, maximumAddress);
+            return UIntPtr.Zero;
         }
+
+        /// <summary>
+        /// Reports an allocation that failed because the system is out of memory.
+        /// </summary>
+        private static void ThrowOutOfMemory(string function, int error) =>
+            throw new OutOfMemoryException($"{function} failed because the system is out of memory (Win32 error {error})");
 
         private static bool ProbeVirtualAlloc2()
         {

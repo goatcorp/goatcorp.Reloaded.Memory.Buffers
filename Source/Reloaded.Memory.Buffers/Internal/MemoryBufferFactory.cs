@@ -1,5 +1,4 @@
 ﻿using System;
-using System.Runtime.InteropServices;
 using Reloaded.Memory.Buffers.Internal.Utilities;
 using Reloaded.Memory.Sources;
 
@@ -41,10 +40,10 @@ namespace Reloaded.Memory.Buffers.Internal
         internal static void AllocateBuffer(nuint bufferAddress, int bufferSize)
         {
             // Get the function, commit the pages and check.
-            var address = VirtualAllocUtility.VirtualAllocLocal(bufferAddress, (uint)bufferSize);
+            var address = VirtualAllocUtility.VirtualAllocLocal(bufferAddress, (uint)bufferSize, out var attempt);
 
             if (address == UIntPtr.Zero)
-                throw new Exception($"Failed to allocate MemoryBuffer of size {bufferSize} at address {bufferAddress}. Last Win32 Error: {Marshal.GetLastWin32Error()}");
+                throw new Exception($"Failed to allocate MemoryBuffer of size {bufferSize} at address 0x{bufferAddress:X}. Attempt: {attempt}");
         }
     }
 }

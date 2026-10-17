@@ -75,7 +75,14 @@ namespace Reloaded.Memory.Buffers
             if (candidates.Count > 0)
                 return new BufferAllocationProperties(candidates[0], bufferSize);
 
-            throw new Exception($"Unable to find memory location to fit MemoryBuffer of size {size} ({bufferSize}) between {minimumAddress} and {maximumAddress}.");
+            // Scan coming up empty means we're done
+            var attempts = new List<AllocationAttempt>
+            {
+                new(AllocationMethod.VirtualAlloc, AllocationOutcome.NoFreeRegionFound, minimumAddress, maximumAddress)
+            };
+
+            throw new BufferAllocationException("MemoryBuffer", size, bufferSize, minimumAddress, maximumAddress,
+                VirtualAllocUtility.IsVirtualAlloc2Available, attempts);
         }
 
         /// <summary>
@@ -103,10 +110,12 @@ namespace Reloaded.Memory.Buffers
                 return Run(retryCount, () =>
                 {
                     int bufferSize = GetBufferSize(size);
-                    var address    = AllocateInRange(bufferSize, minimumAddress, maximumAddress);
+                    var attempts   = new List<AllocationAttempt>();
+                    var address    = AllocateInRange(bufferSize, minimumAddress, maximumAddress, attempts);
 
                     if (address == 0)
-                        throw new Exception($"Unable to find memory location to fit MemoryBuffer of size {size} ({bufferSize}) between {minimumAddress} and {maximumAddress}.");
+                        throw new BufferAllocationException("MemoryBuffer", size, bufferSize, minimumAddress, maximumAddress,
+                            VirtualAllocUtility.IsVirtualAlloc2Available, attempts);
 
                     // Memory is already reserved and committed by AllocateInRange
                     var buffer = MemoryBufferFactory.CreateBuffer(address, bufferSize, allocateMemory: false);
@@ -186,12 +195,14 @@ namespace Reloaded.Memory.Buffers
                 return Run(retryCount, () =>
                 {
                     int bufferSize = GetBufferSize(size);
-                    var address    = AllocateInRange(bufferSize, minimumAddress, maximumAddress);
+                    var attempts   = new List<AllocationAttempt>();
+                    var address    = AllocateInRange(bufferSize, minimumAddress, maximumAddress, attempts);
 
                     if (address != 0)
                         return new BufferAllocationProperties(address, bufferSize);
 
-                    throw new Exception($"Unable to find memory location to fit allocation of size {size} ({bufferSize}) between {minimumAddress} and {maximumAddress}.");
+                    throw new BufferAllocationException("allocation", size, bufferSize, minimumAddress, maximumAddress,
+                        VirtualAllocUtility.IsVirtualAlloc2Available, attempts);
                 });
             }
             finally
@@ -288,8 +299,9 @@ namespace Reloaded.Memory.Buffers
         /// <param name="bufferSize">The size to allocate, as returned by <see cref="GetBufferSize"/>.</param>
         /// <param name="minimumAddress">The minimum absolute address the allocation may occupy.</param>
         /// <param name="maximumAddress">The maximum absolute address the allocation may occupy.</param>
+        /// <param name="attempts">Collects every failed attempt.</param>
         /// <returns>The base address of the allocation, or zero if the range could not be satisfied.</returns>
-        private nuint AllocateInRange(int bufferSize, nuint minimumAddress, nuint maximumAddress)
+        private nuint AllocateInRange(int bufferSize, nuint minimumAddress, nuint maximumAddress, List<AllocationAttempt> attempts)
         {
             nuint preferred = GetPreferredAddress(minimumAddress, maximumAddress);
 
@@ -322,19 +334,27 @@ namespace Reloaded.Memory.Buffers
                     lastLow  = low;
                     lastHigh = high;
 
-                    var result = VirtualAllocUtility.VirtualAlloc2Local(low, high, (ulong)bufferSize);
+                    var result = VirtualAllocUtility.VirtualAlloc2Local(low, high, (ulong)bufferSize, out var attempt);
                     if (result != UIntPtr.Zero)
                         return result;
+
+                    attempts.Add(attempt);
                 }
 
                 return 0;
             }
 
             // No VirtualAlloc2, do the old allocation logic
-            foreach (var candidate in FindCandidateLocations(bufferSize, minimumAddress, maximumAddress))
+            var candidates = FindCandidateLocations(bufferSize, minimumAddress, maximumAddress);
+            if (candidates.Count == 0)
+                attempts.Add(new AllocationAttempt(AllocationMethod.VirtualAlloc, AllocationOutcome.NoFreeRegionFound, minimumAddress, maximumAddress));
+
+            foreach (var candidate in candidates)
             {
-                if (VirtualAllocUtility.VirtualAllocLocal(candidate, (ulong)bufferSize) != UIntPtr.Zero)
+                if (VirtualAllocUtility.VirtualAllocLocal(candidate, (ulong)bufferSize, out var attempt) != UIntPtr.Zero)
                     return candidate;
+
+                attempts.Add(attempt);
             }
 
             return 0;

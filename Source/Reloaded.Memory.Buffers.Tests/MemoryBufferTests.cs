@@ -105,6 +105,72 @@ namespace Reloaded.Memory.Buffers.Tests
             }
         }
 
+        /// <summary>
+        /// A range that can never hold an allocation should fail.
+        /// </summary>
+        [Fact]
+        private void AllocateReportsUnusableRange()
+        {
+            var ex = Assert.Throws<BufferAllocationException>(() => _bufferHelper.Allocate(4096, 0x10000, 0x10000));
+
+            Assert.Equal(4096, ex.RequestedSize);
+            Assert.Equal((nuint)0x10000, ex.MinimumAddress);
+            Assert.Equal((nuint)0x10000, ex.MaximumAddress);
+            Assert.NotEmpty(ex.Attempts);
+
+            var attempt = ex.Attempts[0];
+            if (ex.VirtualAlloc2Available)
+            {
+                Assert.Equal(AllocationMethod.VirtualAlloc2, attempt.Method);
+                Assert.Equal(AllocationOutcome.RangeUnusable, attempt.Outcome);
+                Assert.Contains("range unusable", ex.Message);
+            }
+            else
+            {
+                Assert.Equal(AllocationMethod.VirtualAlloc, attempt.Method);
+                Assert.Equal(AllocationOutcome.NoFreeRegionFound, attempt.Outcome);
+            }
+
+            Assert.Equal(0, attempt.Win32Error);
+            Assert.Contains("0x10000", ex.Message);
+        }
+
+        /// <summary>
+        /// A range that is valid but has no room left in it should have the correct error.
+        /// </summary>
+        [Fact]
+        private void AllocateReportsWin32Error()
+        {
+            var occupied = _bufferHelper.Allocate(4096);
+            try
+            {
+                nuint minimumAddress = occupied.MemoryAddress;
+                nuint maximumAddress = occupied.MemoryAddress + (nuint)occupied.Size - 1;
+
+                var ex = Assert.Throws<BufferAllocationException>(
+                    () => _bufferHelper.Allocate(4096, minimumAddress, maximumAddress));
+
+                Assert.NotEmpty(ex.Attempts);
+                var attempt = ex.Attempts[0];
+
+                if (ex.VirtualAlloc2Available)
+                {
+                    Assert.Equal(AllocationMethod.VirtualAlloc2, attempt.Method);
+                    Assert.Equal(AllocationOutcome.KernelRefused, attempt.Outcome);
+                    Assert.NotEqual(0, attempt.Win32Error);
+                    Assert.Contains("win32=", ex.Message);
+                }
+                else
+                {
+                    Assert.Equal(AllocationMethod.VirtualAlloc, attempt.Method);
+                }
+            }
+            finally
+            {
+                _bufferHelper.Free(occupied.MemoryAddress);
+            }
+        }
+
         [Fact]
         private void AllocateConcurrent()
         {

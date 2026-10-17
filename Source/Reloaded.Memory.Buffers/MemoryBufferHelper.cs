@@ -27,7 +27,7 @@ namespace Reloaded.Memory.Buffers
         private static readonly nuint[] WindowHalfWidths = [0x100000, 0x1000000, 0x10000000, 0];
 
         /// <summary> Implementation of the Searcher that scans and finds existing <see cref="MemoryBuffer"/>s within the current process. </summary>
-        private readonly MemoryBufferSearcher _bufferSearcher = new();
+        private static readonly MemoryBufferSearcher BufferSearcher = new();
 
         /// <summary> The process on which the MemoryBuffer acts upon. </summary>
         public Process Process { get; private set; }
@@ -39,7 +39,8 @@ namespace Reloaded.Memory.Buffers
         public MemoryBufferHelper(Process process)
         {
             Process = process;
-            if (process.Id != Process.GetCurrentProcess().Id)
+
+            if (process.Id != Environment.ProcessId)
                 throw new ArgumentException("MemoryBufferHelper only supports the current process.");
         }
 
@@ -119,7 +120,7 @@ namespace Reloaded.Memory.Buffers
 
                     // Memory is already reserved and committed by AllocateInRange
                     var buffer = MemoryBufferFactory.CreateBuffer(address, bufferSize, allocateMemory: false);
-                    _bufferSearcher.AddBuffer(buffer);
+                    BufferSearcher.AddBuffer(buffer);
 
                     return buffer;
                 });
@@ -147,7 +148,7 @@ namespace Reloaded.Memory.Buffers
         public MemoryBuffer[] FindBuffers(int size, nuint minimumAddress, nuint maximumAddress)
         {
             // Get buffers already existing in process.
-            var buffers = _bufferSearcher.GetBuffers(size);
+            var buffers = BufferSearcher.GetBuffers(size);
 
             // Get all MemoryBuffers where their unused space fits into the given minimum and maximum address.
             AddressRange allowedRange = new AddressRange(minimumAddress, maximumAddress);

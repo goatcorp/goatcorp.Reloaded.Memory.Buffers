@@ -341,10 +341,10 @@ namespace Reloaded.Memory.Buffers
                     attempts.Add(attempt);
                 }
 
-                return 0;
+                // We used to return here, but let's try with legacy VirtualAlloc
             }
 
-            // No VirtualAlloc2, do the old allocation logic
+            // No VirtualAlloc2 or it failed, do the old allocation logic
             var candidates = FindCandidateLocations(bufferSize, minimumAddress, maximumAddress);
             if (candidates.Count == 0)
                 attempts.Add(new AllocationAttempt(AllocationMethod.VirtualAlloc, AllocationOutcome.NoFreeRegionFound, minimumAddress, maximumAddress));

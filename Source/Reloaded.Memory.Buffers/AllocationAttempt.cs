@@ -44,7 +44,12 @@ namespace Reloaded.Memory.Buffers
         /// <summary>
         /// No call was made because scanning the process memory map turned up no free region.
         /// </summary>
-        NoFreeRegionFound
+        NoFreeRegionFound,
+
+        /// <summary>
+        /// The kernel returned memory outside the requested address range.
+        /// </summary>
+        OutOfRange
     }
 
     /// <summary>
@@ -96,6 +101,7 @@ namespace Reloaded.Memory.Buffers
                 AllocationOutcome.RangeUnusable => "range unusable",
                 AllocationOutcome.RangeTooSmall => "range too small",
                 AllocationOutcome.NoFreeRegionFound => "no free region in range",
+                AllocationOutcome.OutOfRange => "returned out of range",
                 _ => Outcome.ToString()
             };
 

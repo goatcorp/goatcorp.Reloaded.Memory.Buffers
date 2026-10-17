@@ -144,6 +144,13 @@ namespace Reloaded.Memory.Buffers.Internal.Utilities
                 parameters,
                 (uint)parameters.Length
             );
+            
+            if (result != UIntPtr.Zero && (result < low || result + (allocSize - 1) > high))
+            {
+                VirtualFreeUtility.VirtualFreeLocal(result);
+                attempt = new AllocationAttempt(AllocationMethod.VirtualAlloc2, AllocationOutcome.OutOfRange, low, high);
+                return UIntPtr.Zero;
+            }
 
             if (result != UIntPtr.Zero)
             {

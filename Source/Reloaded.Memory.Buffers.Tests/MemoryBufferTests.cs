@@ -159,6 +159,9 @@ namespace Reloaded.Memory.Buffers.Tests
                     Assert.Equal(AllocationOutcome.KernelRefused, attempt.Outcome);
                     Assert.NotEqual(0, attempt.Win32Error);
                     Assert.Contains("win32=", ex.Message);
+
+                    // We used the fallback
+                    Assert.Contains(ex.Attempts, a => a.Method == AllocationMethod.VirtualAlloc);
                 }
                 else
                 {

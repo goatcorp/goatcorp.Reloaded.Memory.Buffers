@@ -67,6 +67,8 @@ namespace Reloaded.Memory.Buffers
                 throw new ArgumentException("Please do not set the minimum address to 0 or negative. It collides with the return values of Windows API functions" +
                                             "where e.g. 0 is returned on failure but you can also allocate successfully on 0.");
 
+            ValidateRequest(size, minimumAddress, maximumAddress);
+
             int bufferSize = GetBufferSize(size);
             var candidates = FindCandidateLocations(bufferSize, minimumAddress, maximumAddress);
 
@@ -97,6 +99,9 @@ namespace Reloaded.Memory.Buffers
             if (minimumAddress <= 0)
                 throw new ArgumentException("Please do not set the minimum address to 0 or negative. It collides with the return values of Windows API functions" +
                                             "where e.g. 0 is returned on failure but you can also allocate successfully on 0.");
+
+            ValidateRequest(size, minimumAddress, maximumAddress);
+            ValidateRetries(retryCount);
 
             // Serialized so that the scan in the fallback path can't go stale through another of our own threads
             // allocating the candidate first, and so that registering the buffer stays consistent with allocating it.
@@ -147,16 +152,20 @@ namespace Reloaded.Memory.Buffers
             // Get buffers already existing in process.
             var buffers = BufferSearcher.GetBuffers(size);
 
-            // Get all MemoryBuffers where their unused space fits into the given minimum and maximum address.
+            // Get all MemoryBuffers where the next item fits into the given minimum and maximum address.
+            // The rest of the buffer can lie outside. Alignment padding is included by the caller.
             AddressRange allowedRange = new AddressRange(minimumAddress, maximumAddress);
             var memoryBuffers         = new List<MemoryBuffer>(buffers.Length);
 
             foreach (var buffer in buffers)
             {
                 var bufferHeader = buffer.Properties;
-                var bufferAddressRange = new AddressRange(bufferHeader.WritePointer, bufferHeader.DataPointer + (nuint)bufferHeader.Size - 1);
-                if (allowedRange.Contains(ref bufferAddressRange))
+                nuint itemEnd = size > 0 ? bufferHeader.WritePointer + (nuint)size - 1 : bufferHeader.WritePointer;
+                var itemRange = new AddressRange(bufferHeader.WritePointer, itemEnd);
+                if (allowedRange.Contains(ref itemRange))
+                {
                     memoryBuffers.Add(buffer);
+                }
             }
 
             return memoryBuffers.ToArray();
@@ -184,6 +193,9 @@ namespace Reloaded.Memory.Buffers
             if (minimumAddress <= 0)
                 throw new ArgumentException("Please do not set the minimum address to 0 or negative. It collides with the return values of Windows API functions" +
                                             "where e.g. 0 is returned on failure but you can also allocate successfully on 0.");
+
+            ValidateRequest(size, minimumAddress, maximumAddress);
+            ValidateRetries(retryCount);
 
             // See CreateMemoryBuffer for why allocation is serialized, and why the lock is taken this way.
             bool lockTaken = false;
@@ -254,6 +266,33 @@ namespace Reloaded.Memory.Buffers
             return Mathematics.RoundUp(size, granularity);
         }
 
+
+        /// <summary>
+        /// Rejects requests that don't make sense/would wrap around.
+        /// </summary>
+        private static void ValidateRequest(int size, nuint minimumAddress, nuint maximumAddress)
+        {
+            if (size <= 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(size), size, "Size must be positive.");
+            }
+
+            if (minimumAddress > maximumAddress)
+            {
+                throw new ArgumentException($"Minimum address 0x{minimumAddress:X} is above maximum address 0x{maximumAddress:X}.", nameof(minimumAddress));
+            }
+        }
+
+        /// <summary>
+        /// Reject invalid retry counts.
+        /// </summary>
+        private static void ValidateRetries(int retryCount)
+        {
+            if (retryCount <= 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(retryCount), retryCount, "Retry count must be positive.");
+            }
+        }
 
         /// <summary>
         /// Runs a given function with a specified number of retries if an exception is thrown.

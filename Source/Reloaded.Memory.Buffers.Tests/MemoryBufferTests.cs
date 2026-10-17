@@ -203,6 +203,44 @@ namespace Reloaded.Memory.Buffers.Tests
         }
 
         /// <summary>
+        /// A buffer whose next item fits in the range is reusable.
+        /// </summary>
+        [Fact]
+        private void FindBuffersAcrossRangeEnd()
+        {
+            var buffer = _bufferHelper.CreateMemoryBuffer(4096);
+            try
+            {
+                nuint writePointer = buffer.Properties.WritePointer;
+
+                Assert.Contains(buffer, _bufferHelper.FindBuffers(16, writePointer, writePointer + 15));
+                Assert.DoesNotContain(buffer, _bufferHelper.FindBuffers(16, writePointer, writePointer + 14));
+            }
+            finally
+            {
+                Internal.Testing.Buffers.FreeBuffer(buffer);
+            }
+        }
+
+        /// <summary>
+        /// Requests that would wrap around are rejected.
+        /// </summary>
+        [Fact]
+        private void RejectsInvalidRequests()
+        {
+            Assert.Throws<ArgumentOutOfRangeException>(() => _bufferHelper.Allocate(0));
+            Assert.Throws<ArgumentOutOfRangeException>(() => _bufferHelper.Allocate(4096, retryCount: 0));
+            Assert.Throws<ArgumentException>(() => _bufferHelper.Allocate(4096, 0x20000, 0x10000));
+
+            Assert.Throws<ArgumentOutOfRangeException>(() => _bufferHelper.CreateMemoryBuffer(-1));
+            Assert.Throws<ArgumentOutOfRangeException>(() => _bufferHelper.CreateMemoryBuffer(4096, retryCount: 0));
+            Assert.Throws<ArgumentException>(() => _bufferHelper.CreateMemoryBuffer(4096, 0x20000, 0x10000));
+
+            Assert.Throws<ArgumentOutOfRangeException>(() => _bufferHelper.FindBufferLocation(0, 0x10000, 0x7FFFFFFF));
+            Assert.Throws<ArgumentException>(() => _bufferHelper.FindBufferLocation(4096, 0x20000, 0x10000));
+        }
+
+        /// <summary>
         /// We allocate as close as possible to the address we actually want to be near.
         /// </summary>
         [Fact]

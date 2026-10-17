@@ -202,6 +202,38 @@ namespace Reloaded.Memory.Buffers.Tests
             }
         }
 
+        /// <summary>
+        /// We allocate as close as possible to the address we actually want to be near.
+        /// </summary>
+        [Fact]
+        private void AllocateNearPreferred()
+        {
+            const int areaSize  = 0x4000000;
+            const int blockSize = 0x200000;
+
+            var area = _bufferHelper.Allocate(areaSize);
+            _bufferHelper.Free(area.MemoryAddress);
+
+            nuint minimumAddress = area.MemoryAddress;
+            nuint maximumAddress = area.MemoryAddress + areaSize - 1;
+            nuint preferred = minimumAddress + (maximumAddress - minimumAddress) / 2;
+            nuint blockStart = area.MemoryAddress + areaSize / 2 - blockSize / 2;
+
+            var block = _bufferHelper.Allocate(blockSize, blockStart, blockStart + blockSize - 1);
+            try
+            {
+                var buf = _bufferHelper.Allocate(4096, minimumAddress, maximumAddress);
+                _bufferHelper.Free(buf.MemoryAddress);
+
+                nuint distance = buf.MemoryAddress > preferred ? buf.MemoryAddress - preferred : preferred - buf.MemoryAddress;
+                Assert.InRange(distance, (nuint)0, (nuint)blockSize);
+            }
+            finally
+            {
+                _bufferHelper.Free(block.MemoryAddress);
+            }
+        }
+
         [Fact]
         private void AllocateConcurrent()
         {

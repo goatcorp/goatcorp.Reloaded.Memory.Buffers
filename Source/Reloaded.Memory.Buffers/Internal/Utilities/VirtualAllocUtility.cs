@@ -6,6 +6,18 @@ using static Reloaded.Memory.Kernel32.Kernel32;
 
 namespace Reloaded.Memory.Buffers.Internal.Utilities
 {
+    /// <summary>
+    /// Which end of the range to search from.
+    /// </summary>
+    internal enum AllocationPlacement
+    {
+        /// <summary>Bottom up (default).</summary>
+        BottomUp,
+
+        /// <summary>Top down (highest free address).</summary>
+        TopDown
+    }
+
     internal static class VirtualAllocUtility
     {
         private const int ERROR_NOT_ENOUGH_MEMORY = 8; // "Not enough memory resources are available to process this command."
@@ -14,6 +26,7 @@ namespace Reloaded.Memory.Buffers.Internal.Utilities
 
         private const uint MEM_RESERVE_COMMIT = (uint)(MEM_ALLOCATION_TYPE.MEM_RESERVE | MEM_ALLOCATION_TYPE.MEM_COMMIT);
         private const uint PAGE_EXECUTE_READWRITE  = (uint)MEM_PROTECTION.PAGE_EXECUTE_READWRITE;
+        private const uint MEM_TOP_DOWN = (uint)MEM_ALLOCATION_TYPE.MEM_TOP_DOWN;
 
         /// <summary>
         /// The granularity every allocation base address is aligned to.
@@ -76,9 +89,10 @@ namespace Reloaded.Memory.Buffers.Internal.Utilities
         }
 
         public static unsafe UIntPtr VirtualAlloc2Local(nuint minimumAddress, nuint maximumAddress, ulong size) =>
-            VirtualAlloc2Local(minimumAddress, maximumAddress, size, out _);
+            VirtualAlloc2Local(minimumAddress, maximumAddress, size, AllocationPlacement.BottomUp, out _);
 
-        public static unsafe UIntPtr VirtualAlloc2Local(nuint minimumAddress, nuint maximumAddress, ulong size, out AllocationAttempt attempt)
+        public static unsafe UIntPtr VirtualAlloc2Local(nuint minimumAddress, nuint maximumAddress, ulong size,
+            AllocationPlacement placement, out AllocationAttempt attempt)
         {
             if (!CanUseVirtualAlloc2)
                 throw new InvalidOperationException("VirtualAlloc2 is not available");
@@ -134,12 +148,18 @@ namespace Reloaded.Memory.Buffers.Internal.Utilities
                 }
             };
 
+            uint allocationType = MEM_RESERVE_COMMIT;
+            if (placement == AllocationPlacement.TopDown)
+            {
+                allocationType |= MEM_TOP_DOWN;
+            }
+
             var result = VirtualAlloc2
             (
                 -1,
                 0, // use requirements parameter
                 allocSize,
-                MEM_RESERVE_COMMIT,
+                allocationType,
                 PAGE_EXECUTE_READWRITE,
                 parameters,
                 (uint)parameters.Length

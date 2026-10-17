@@ -20,11 +20,8 @@ namespace Reloaded.Memory.Buffers
         /// <summary> Contains the default size of memory pages to be allocated. </summary>
         internal const int DefaultPageSize = 0x1000;
 
-        // How far either side of the preferred address we let the kernel place an allocation
-        // Arbitrarily picked, seems fine for now. This is only here to improve chances of buffer
-        // reuse, because windows seems to always pick the first free granule going up from the
-        // minimum address
-        private static readonly nuint[] WindowHalfWidths = [0x100000, 0x1000000, 0x10000000, 0];
+        // How far either side of the preferred address the first VirtualAlloc2 search window reaches.
+        private const nuint InitialWindowHalfWidth = 0x100000;
 
         /// <summary> Implementation of the Searcher that scans and finds existing <see cref="MemoryBuffer"/>s within the current process. </summary>
         private static readonly MemoryBufferSearcher BufferSearcher = new();
@@ -308,38 +305,34 @@ namespace Reloaded.Memory.Buffers
 
             if (VirtualAllocUtility.IsVirtualAlloc2Available)
             {
-                // MEM_ADDRESS_REQUIREMENTS has no notion of a preferred address, only of a permitted range, and the
-                // kernel is free to place us anywhere inside it (which it seems to do bottom up)
-                // Go broad only if we can't find something close to where we actually need to be
-                nuint lastLow = 0, lastHigh = 0;
+                // MEM_ADDRESS_REQUIREMENTS has no notion of a preferred address, only of a permitted range.
+                nuint size = (nuint)bufferSize;
 
-                foreach (var halfWidth in WindowHalfWidths)
+                // Below may end up to a buffer past preferred
+                nuint belowHigh = maximumAddress - preferred > size - 1 ? preferred + (size - 1) : maximumAddress;
+
+                for (nuint halfWidth = InitialWindowHalfWidth; ; halfWidth *= 2)
                 {
-                    nuint low  = minimumAddress;
-                    nuint high = maximumAddress;
+                    // preferred is always inside [minimumAddress, maximumAddress]
+                    nuint low  = preferred - minimumAddress > halfWidth ? preferred - halfWidth : minimumAddress;
+                    nuint high = maximumAddress - preferred > halfWidth ? preferred + halfWidth : maximumAddress;
 
-                    if (halfWidth != 0)
+                    var below = TryAllocate2(bufferSize, low, belowHigh, AllocationPlacement.TopDown, attempts);
+                    if (below != 0)
                     {
-                        // preferred is always inside [minimumAddress, maximumAddress]
-                        if (preferred - minimumAddress > halfWidth)
-                            low = preferred - halfWidth;
-
-                        if (maximumAddress - preferred > halfWidth)
-                            high = preferred + halfWidth;
+                        return below;
                     }
 
-                    // A range smaller than the first window collapses to the full range on every pass.
-                    if (low == lastLow && high == lastHigh)
-                        continue;
+                    var above = TryAllocate2(bufferSize, preferred, high, AllocationPlacement.BottomUp, attempts);
+                    if (above != 0)
+                    {
+                        return above;
+                    }
 
-                    lastLow  = low;
-                    lastHigh = high;
-
-                    var result = VirtualAllocUtility.VirtualAlloc2Local(low, high, (ulong)bufferSize, out var attempt);
-                    if (result != UIntPtr.Zero)
-                        return result;
-
-                    attempts.Add(attempt);
+                    if (low == minimumAddress && high == maximumAddress)
+                    {
+                        break;
+                    }
                 }
 
                 // We used to return here, but let's try with legacy VirtualAlloc
@@ -359,6 +352,21 @@ namespace Reloaded.Memory.Buffers
             }
 
             return 0;
+        }
+
+        /// <summary>
+        /// Make one VirtualAlloc2 attempt inside the given range.
+        /// </summary>
+        /// <returns>The base address of the allocation, or zero on failure.</returns>
+        private static nuint TryAllocate2(int bufferSize, nuint low, nuint high, AllocationPlacement placement, List<AllocationAttempt> attempts)
+        {
+            var result = VirtualAllocUtility.VirtualAlloc2Local(low, high, (ulong)bufferSize, placement, out var attempt);
+            if (result == UIntPtr.Zero)
+            {
+                attempts.Add(attempt);
+            }
+
+            return result;
         }
 
         /// <summary>

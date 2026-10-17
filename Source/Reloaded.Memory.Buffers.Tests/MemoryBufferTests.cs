@@ -223,6 +223,44 @@ namespace Reloaded.Memory.Buffers.Tests
         }
 
         /// <summary>
+        /// Appending from another thread waits and doesn't deadlock.
+        /// </summary>
+        [Fact]
+        private void ExecuteWithLockExcludesOtherThreads()
+        {
+            const int otherThreadWaitMs = 200;
+
+            var buffer = _bufferHelper.CreateMemoryBuffer(4096);
+            try
+            {
+                Thread other = null;
+                bool otherAdded = false;
+
+                _bufferHelper.ExecuteWithLock(() =>
+                {
+                    Assert.NotEqual((nuint)0, buffer.Add(16));
+
+                    other = new Thread(() =>
+                    {
+                        buffer.Add(16);
+                        otherAdded = true;
+                    });
+                    other.Start();
+
+                    Assert.False(other.Join(otherThreadWaitMs));
+                    return true;
+                });
+
+                other.Join();
+                Assert.True(otherAdded);
+            }
+            finally
+            {
+                Internal.Testing.Buffers.FreeBuffer(buffer);
+            }
+        }
+
+        /// <summary>
         /// Requests that would wrap around are rejected.
         /// </summary>
         [Fact]

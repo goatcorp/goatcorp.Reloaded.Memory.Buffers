@@ -172,6 +172,28 @@ namespace Reloaded.Memory.Buffers
         }
 
         /// <summary>
+        /// Executes a given function while holding the lock shared by every <see cref="MemoryBuffer"/>.
+        /// </summary>
+        /// <param name="func">The function to execute while holding the lock.</param>
+        public T ExecuteWithLock<T>(Func<T> func)
+        {
+            // See CreateMemoryBuffer for why the lock is taken this way.
+            bool lockTaken = false;
+            try
+            {
+                MemoryBuffer.EnterGlobalLock(ref lockTaken, nameof(ExecuteWithLock));
+                return func();
+            }
+            finally
+            {
+                if (lockTaken)
+                {
+                    Monitor.Exit(MemoryBuffer.GlobalLock);
+                }
+            }
+        }
+
+        /// <summary>
         /// Allocates memory that satisfies a set size constraint and proximity to a set address.
         /// </summary>
         /// <param name="size">The minimum size of the memory to be allocated.</param>

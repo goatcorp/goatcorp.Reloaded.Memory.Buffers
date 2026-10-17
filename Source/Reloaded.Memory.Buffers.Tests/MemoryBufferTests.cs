@@ -174,6 +174,34 @@ namespace Reloaded.Memory.Buffers.Tests
             }
         }
 
+        /// <summary>
+        /// A buffer filling the requested range exactly is still reusable.
+        /// </summary>
+        [Fact]
+        private void FindBuffersInExactRange()
+        {
+            var probe = _bufferHelper.Allocate(4096);
+            _bufferHelper.Free(probe.MemoryAddress);
+
+            nuint minimumAddress = probe.MemoryAddress;
+            nuint maximumAddress = probe.MemoryAddress + (nuint)probe.Size - 1;
+
+            var buffer = _bufferHelper.CreateMemoryBuffer(4096, minimumAddress, maximumAddress);
+            try
+            {
+                Assert.Contains(buffer, _bufferHelper.FindBuffers(16, minimumAddress, maximumAddress));
+
+                // Used part is outside the range
+                nuint used = buffer.Add(0x100, 1);
+                Assert.NotEqual((nuint)0, used);
+                Assert.Contains(buffer, _bufferHelper.FindBuffers(16, minimumAddress + 0x100, maximumAddress));
+            }
+            finally
+            {
+                Internal.Testing.Buffers.FreeBuffer(buffer);
+            }
+        }
+
         [Fact]
         private void AllocateConcurrent()
         {

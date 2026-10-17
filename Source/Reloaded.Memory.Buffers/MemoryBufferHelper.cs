@@ -149,14 +149,14 @@ namespace Reloaded.Memory.Buffers
             // Get buffers already existing in process.
             var buffers = _bufferSearcher.GetBuffers(size);
 
-            // Get all MemoryBuffers where their raw data range fits into the given minimum and maximum address.
+            // Get all MemoryBuffers where their unused space fits into the given minimum and maximum address.
             AddressRange allowedRange = new AddressRange(minimumAddress, maximumAddress);
             var memoryBuffers         = new List<MemoryBuffer>(buffers.Length);
 
             foreach (var buffer in buffers)
             {
                 var bufferHeader = buffer.Properties;
-                var bufferAddressRange = new AddressRange(bufferHeader.DataPointer, (bufferHeader.DataPointer + (nuint)bufferHeader.Size));
+                var bufferAddressRange = new AddressRange(bufferHeader.WritePointer, bufferHeader.DataPointer + (nuint)bufferHeader.Size - 1);
                 if (allowedRange.Contains(ref bufferAddressRange))
                     memoryBuffers.Add(buffer);
             }
